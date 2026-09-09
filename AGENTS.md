@@ -1,7 +1,7 @@
 # AGENTS.md
 
 This file provides guidance to ZCode / Claude Code agents working with this repository.
-Last updated: 2026-07-30.
+Last updated: 2026-09-09.
 
 ## Project identity and research scope
 
@@ -97,6 +97,18 @@ conda run -n eeg_pipeline python scripts/19_train_tuab_component_eegnet.py [--in
 # 20 — Independent TUAB XGBoost models from script 18 paired epochs
 conda run -n eeg_pipeline python scripts/20_train_tuab_component_xgboost.py [--condition raw|specific|coherent|specific_coherent|all] [--feature-set base211|base211_conn80] [--workers N] [--force]
 
+# 21 — Continuous TUEP background-interval specific/coherent caches
+conda run -n eeg_pipeline python scripts/21_cache_tuep_continuous_wiener.py [--data-dir PATH] [--cache-dir PATH] [--mode frequency|phasegated|zerophase] [--workers N] [--force]
+
+# 22 — TUEP raw/specific/coherent plus 38-channel combined epochs
+conda run -n eeg_pipeline python scripts/22_extract_tuep_component_epochs.py [--input-dir PATH] [--output-dir PATH] [--mode frequency|phasegated|zerophase] [--workers N] [--force]
+
+# 23 — Patient-level TUEP EEGNet models from script 22 epochs
+conda run -n eeg_pipeline python scripts/23_train_tuep_component_eegnet.py [--input-dir PATH] [--output-dir PATH] [--mode frequency|phasegated|zerophase] [--condition raw|specific|coherent|specific_coherent|all] [--device auto|cpu|cuda|mps] [--workers N] [--random-state N] [--force]
+
+# 24 — Patient-level TUEP XGBoost models from script 22 epochs
+conda run -n eeg_pipeline python scripts/24_train_tuep_component_xgboost.py [--condition raw|specific|coherent|specific_coherent|all] [--feature-set base211|base211_conn80] [--workers N] [--force]
+
 # ERP-CORE counterpart of the fixed 8-cell Wiener phase/coherence experiment
 bash scripts/run_erp_core_wiener_phase_grid.sh [--data-dir PATH] [--fif PATH]
 ```
@@ -125,6 +137,18 @@ Script 20 trains the same four conditions with independent XGBoost models. For
 specific_coherent it extracts the configured feature profile independently from
 each 19-channel bank and concatenates the two feature vectors (422 dimensions
 for base211 or 582 for base211_conn80).
+
+Scripts 21–24 are the patient-level TUEP counterpart of scripts 17–20. Script
+21 obtains the same seizure-buffered background intervals as script 01 and
+applies overlap-add Wiener processing independently within each contiguous
+interval before any epoch split. Script 22 creates a raw-derived shared
+artifact mask, zero-fills missing TUEP channels into the canonical 19-channel
+layout, and writes raw/specific/coherent plus 38-channel specific_coherent
+epochs without crossing interval gaps. Script 23 uses patient-equal weighted
+loss, validation patient AUPRC checkpoint selection, and a frozen validation
+patient balanced-accuracy threshold. Script 24 reuses the script 20 feature and
+XGBoost configuration but aggregates validation/test probabilities by TUEP
+patient. TUEP labels remain 0=epilepsy and 1=control (the no_epilepsy folder).
 
 The TUAB counterpart of the fixed 8-cell Wiener phase/coherence experiment is `bash scripts/run_tuab_wiener_threshold_phase_experiment.sh [--workers N] [--from N]`. Its `configs/exp_tuab_wiener_phase_{1..8}.yaml` files inherit through `exp_tuab_wiener_phase_base.yaml` → `tuab.yaml`, share `cache_tuab`, and write isolated outputs under `results_tuab/exp_wiener_phase/`. The wrapper also runs script 09 with the TUAB config prefix after training and archiving. To limit disk use, the shared experiment driver keeps `epochs/` as the required common input but enforces that `wiener_frequency/`, `wiener_phasegated/`, and `ica/` never coexist; the active derived cache is deleted immediately after its XGBoost feature extraction finishes.
 

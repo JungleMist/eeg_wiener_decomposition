@@ -81,7 +81,7 @@ launch `eeg_bg_studio.exe` without installing Python.
 
 | Dataset | Labels | Evaluation unit | Split policy | Supported path |
 |---------|--------|-----------------|--------------|----------------|
-| TUEP | 0 epilepsy, 1 control | patient | stratified patient split | scripts 01–08 |
+| TUEP | 0 epilepsy, 1 control | patient | stratified patient split | scripts 01–08, 21–24 |
 | TUAB | 0 abnormal, 1 normal | recording | official eval = test; official train is patient-grouped into train/val | scripts 01–07 |
 
 For TUAB, script 01 extracts non-overlapping 20-second epochs from at most the first 20 minutes of each recording. Script 06 trains at epoch level, averages `P(normal)` within each `recording_id`, selects the record-level threshold on validation recordings, and applies that fixed threshold to official eval recordings. If one patient has both normal and abnormal recordings, they remain separate labeled evaluation units but are assigned together to train or validation.
@@ -89,6 +89,30 @@ For TUAB, script 01 extracts non-overlapping 20-second epochs from at most the f
 **CNN scope:** script 08 and the `eeg_bg/ml/cnn_*` modules are currently **TUEP-only**. `scripts/08_train_cnn.py --config configs/tuab.yaml` exits with a clear error; no TUAB CNN compatibility is implied by the shared epoch cache.
 
 Use `configs/default.yaml` for TUEP and `configs/tuab.yaml` for TUAB. The two configs use different cache and result roots.
+
+### Continuous TUEP component experiment (scripts 21–24)
+
+Scripts 21–24 mirror the TUAB component experiment while retaining TUEP's
+patient-level evaluation semantics. Script 21 applies 20-second, 50%-overlap
+ECMAD windows independently to every contiguous seizure-buffered background
+interval; intervals are never joined before filtering. Script 22 then creates
+non-overlapping 20-second epochs with one raw-derived artifact mask and stores
+`raw`, `specific`, `coherent`, and 38-channel `specific_coherent` (specific bank
+first). Missing TUEP channels are zero-filled into the canonical 19-channel
+order. Scripts 23 and 24 aggregate all recordings and epochs by patient;
+`1=control` is the modeled positive class and corresponds to `01_no_epilepsy`.
+
+```bash
+conda run -n eeg_pipeline python scripts/21_cache_tuep_continuous_wiener.py --workers 4
+conda run -n eeg_pipeline python scripts/22_extract_tuep_component_epochs.py --workers 4
+conda run -n eeg_pipeline python scripts/23_train_tuep_component_eegnet.py --condition all --device auto
+conda run -n eeg_pipeline python scripts/24_train_tuep_component_xgboost.py --condition all --feature-set base211
+```
+
+Script 23 selects its checkpoint by validation patient AUPRC and freezes a
+validation patient balanced-accuracy threshold before one test evaluation.
+Script 24 uses patient-grouped XGBoost training, chooses the macro-F1 threshold
+on validation patients, and reports patient-level metrics and SHAP artifacts.
 
 ---
 
