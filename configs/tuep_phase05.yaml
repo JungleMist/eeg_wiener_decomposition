@@ -2,7 +2,7 @@ extends: default.yaml
 
 # TUEP v3.1.0 patient-level epilepsy/control classification for Scripts 21-24.
 paths:
-  data_root: "/root/autodl-tmp/data/tuab/v3.1.0"
+  data_root: "/root/autodl-tmp/data/tuep/v3.1.0"
   cache_dir: "/root/autodl-tmp/cache"
   results_dir: "results/results_tuep_phase05"
 
