@@ -1,0 +1,42 @@
+extends: default.yaml
+
+# TUEP v3.1.0 patient-level epilepsy/control classification for Scripts 21-24.
+paths:
+  data_root: "/root/autodl-tmp/data/tuab/v3.0.1"
+  cache_dir: "/root/autodl-tmp/cache"
+  results_dir: "results/results_tuep_phase05"
+
+dataset:
+  active: "tuep"
+
+channels:
+  channel_groups:
+    - [FP1, FP2, F3, F4, F7, F8, FZ]
+    - [F3, T3, T5, C3, CZ]
+    - [F4, T4, T6, C4]
+    - [P3, P4, PZ, O1, O2]
+
+wiener:
+  mode: phasegated
+  phase_gate_threshold_rad: 0.5
+  coherent_gate_enabled: false
+
+# Script 23 uses patient-equal loss and patient-level validation/test metrics.
+ml:
+  tuep_component_eegnet:
+    random_state: 42
+    device: auto
+    num_workers: 0
+    F1: 8
+    D: 2
+    dropout: 0.25
+    lr: 0.001
+    weight_decay: 0.0001
+    batch_size: 64
+    records_per_step: 4
+    max_epochs: 200
+    patience: 20
+    lr_patience: 10
+    lr_factor: 0.5
+    early_stopping_metric: validation_patient_auprc
+    threshold_selection: validation_patient_balanced_accuracy
