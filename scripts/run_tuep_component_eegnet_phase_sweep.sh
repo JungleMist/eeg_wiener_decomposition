@@ -7,6 +7,7 @@ set -euo pipefail
 WORKERS=10
 CHECK_CONFIG=0
 FROM_PHASE=""
+CONDITION="specific_coherent"
 
 usage() {
     cat <<'EOF'
@@ -16,6 +17,8 @@ Usage:
 Options:
   --workers N       Worker processes for scripts 21, 22, 23, and 24 (default: 10)
   --from PHASE      Start from this phase (0.01, 0.05, 0.1, 0.5, or 1)
+  --condition NAME  Condition for both EEGNet and XGBoost (raw, specific, coherent,
+                    specific_coherent, or all; default: specific_coherent)
   --check-config    Validate configs and cleanup boundaries, then exit
   -h, --help        Show this help
 EOF
@@ -31,6 +34,11 @@ while [[ $# -gt 0 ]]; do
         --from)
             [[ $# -ge 2 ]] || { echo "--from requires a phase argument" >&2; exit 1; }
             FROM_PHASE="$2"
+            shift 2
+            ;;
+        --condition)
+            [[ $# -ge 2 ]] || { echo "--condition requires a condition argument" >&2; exit 1; }
+            CONDITION="$2"
             shift 2
             ;;
         --check-config)
@@ -53,6 +61,15 @@ if [[ ! "$WORKERS" =~ ^[1-9][0-9]*$ ]]; then
     echo "--workers must be a positive integer" >&2
     exit 1
 fi
+ALL_CONDITIONS=("raw" "specific" "coherent" "specific_coherent")
+case "$CONDITION" in
+    raw|specific|coherent|specific_coherent|all)
+        ;;
+    *)
+        echo "--condition must be one of: raw specific coherent specific_coherent all" >&2
+        exit 1
+        ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -74,8 +91,14 @@ RESULT_DIR_NAMES=(
     "results_tuep_phase05"
     "results_tuep_phase1"
 )
-TARGET_CONDITION="specific_coherent"
-STALE_CONDITIONS=("raw" "specific" "coherent")
+STALE_CONDITIONS=()
+if [[ "$CONDITION" != "all" ]]; then
+    for condition in "${ALL_CONDITIONS[@]}"; do
+        if [[ "$condition" != "$CONDITION" ]]; then
+            STALE_CONDITIONS+=("$condition")
+        fi
+    done
+fi
 START_INDEX=0
 if [[ -n "$FROM_PHASE" ]]; then
     START_INDEX=-1
@@ -243,7 +266,7 @@ echo "Project root: $PROJECT_ROOT"
 echo "Git commit: $(git rev-parse HEAD)"
 echo "Workers for scripts 21/22/23/24: $WORKERS"
 echo "Phase order: ${PHASES[*]}"
-echo "Training condition: $TARGET_CONDITION"
+echo "Training condition: $CONDITION"
 echo "Starting phase: ${PHASES[$START_INDEX]}"
 echo "Configs: ${CONFIGS[*]}"
 echo "Cleanup target: $PHASE_CACHE_DIR"
@@ -271,18 +294,24 @@ for ((index = START_INDEX; index < ${#CONFIGS[@]}; index++)); do
     clear_stale_model_outputs "$output_dir" "$xgb_output_dir"
     run_step "phase=$phase script=23 component EEGNet" \
         "${CONDA_RUN[@]}" python scripts/23_train_tuep_component_eegnet.py \
-        --config "$config" --condition "$TARGET_CONDITION" \
+        --config "$config" --condition "$CONDITION" \
         --workers "$WORKERS" --force
 
     for artifact in run_summary.json condition_metrics.csv; do
         [[ -s "$output_dir/$artifact" ]] || { echo "Missing or empty Script 23 result artifact: $output_dir/$artifact" >&2; exit 1; }
         echo "Verified Script 23 result artifact: $output_dir/$artifact"
     done
-    for artifact in best_model.pt best_params.json history.csv val_metrics.json test_metrics.json \
-        val_predictions.csv test_predictions.csv val_epoch_predictions.csv test_epoch_predictions.csv; do
-        artifact_path="$output_dir/conditions/$TARGET_CONDITION/$artifact"
-        [[ -s "$artifact_path" ]] || { echo "Missing or empty Script 23 condition artifact: $artifact_path" >&2; exit 1; }
-        echo "Verified Script 23 condition artifact: $artifact_path"
+    selected_conditions=("${ALL_CONDITIONS[@]}")
+    if [[ "$CONDITION" != "all" ]]; then
+        selected_conditions=("$CONDITION")
+    fi
+    for selected_condition in "${selected_conditions[@]}"; do
+        for artifact in best_model.pt best_params.json history.csv val_metrics.json test_metrics.json \
+            val_predictions.csv test_predictions.csv val_epoch_predictions.csv test_epoch_predictions.csv; do
+            artifact_path="$output_dir/conditions/$selected_condition/$artifact"
+            [[ -s "$artifact_path" ]] || { echo "Missing or empty Script 23 condition artifact: $artifact_path" >&2; exit 1; }
+            echo "Verified Script 23 condition artifact: $artifact_path"
+        done
     done
     for condition in "${STALE_CONDITIONS[@]}"; do
         [[ ! -e "$output_dir/conditions/$condition" ]] || { echo "Unexpected stale EEGNet condition output: $output_dir/conditions/$condition" >&2; exit 1; }
@@ -291,14 +320,16 @@ for ((index = START_INDEX; index < ${#CONFIGS[@]}; index++)); do
     # Script 24 consumes Script 22 epochs, so it must run before phase cleanup.
     run_step "phase=$phase script=24 component XGBoost" \
         "${CONDA_RUN[@]}" python scripts/24_train_tuep_component_xgboost.py \
-        --config "$config" --condition "$TARGET_CONDITION" --feature-set base211 \
+        --config "$config" --condition "$CONDITION" --feature-set base211 \
         --workers "$WORKERS" --force
 
-    for artifact in run_metadata.json data_stats.json model.joblib scaler.joblib \
-        best_params.json val_metrics.json test_metrics.json; do
-        artifact_path="$xgb_output_dir/$TARGET_CONDITION/$artifact"
-        [[ -s "$artifact_path" ]] || { echo "Missing or empty Script 24 condition artifact: $artifact_path" >&2; exit 1; }
-        echo "Verified Script 24 condition artifact: $artifact_path"
+    for selected_condition in "${selected_conditions[@]}"; do
+        for artifact in run_metadata.json data_stats.json model.joblib scaler.joblib \
+            best_params.json val_metrics.json test_metrics.json; do
+            artifact_path="$xgb_output_dir/$selected_condition/$artifact"
+            [[ -s "$artifact_path" ]] || { echo "Missing or empty Script 24 condition artifact: $artifact_path" >&2; exit 1; }
+            echo "Verified Script 24 condition artifact: $artifact_path"
+        done
     done
     [[ -s "$xgb_output_dir/comparison_summary.csv" ]] || {
         echo "Missing or empty Script 24 comparison summary: $xgb_output_dir/comparison_summary.csv" >&2
