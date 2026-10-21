@@ -1,0 +1,9 @@
+extends: erp_core_auto_ecmad_eegnet.yaml
+
+# Same subjects, split seed and model/training budget; only channel set changes.
+paths:
+  results_dir: results/auto_ecmad_ern_3ch
+
+auto_ecmad:
+  adapter:
+    channels: [FP1, F3, C3]

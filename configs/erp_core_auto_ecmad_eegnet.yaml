@@ -1,0 +1,54 @@
+extends: erp_core_flankers_2.yaml
+
+paths:
+  cache_dir: cache/auto_ecmad
+  results_dir: results/auto_ecmad_ern
+
+preprocessing:
+  target_sfreq: 250
+  bandpass: [0.5, 45.0]
+  epoch_length_sec: 12
+  artifact_threshold_uv: 250.0
+
+wiener:
+  mode: phasegated
+  phase_gate_threshold_rad: 1.0
+  coherence_threshold: 0.0
+  coherent_gate_enabled: false
+  protected_band_hz: null
+  freq_band: [0.5, 45.0]
+  nperseg: 250
+  filter_magnitude_threshold: 50.0
+
+auto_ecmad:
+  random_state: 42
+  workers: 1 # CPU recording preparation only; never the number of GPUs.
+  adapter:
+    name: erp_core
+    data_dir: ~/Data/ERP_CORE
+    subjects: null
+    channels: [FP1, F3, F7, FC3, C3, C5, P3, P7, P9, PO7, PO3, O1, Oz, Pz, CPz,
+               FP2, Fz, F4, F8, FC4, FCz, Cz, C4, C6, P4, P8, P10, PO8, PO4, O2]
+  splits:
+    test_size: 0.2
+    validation_size: 0.2
+    selection_size: 0.2
+  search:
+    strategy: exhaustive
+    input_mode: target_components_only
+    tie_tolerance: 0.000001
+  training:
+    backend: eegnet
+    device: auto
+    native_threads: 1
+    num_workers: 0
+    F1: 8
+    D: 2
+    dropout: 0.25
+    lr: 0.001
+    weight_decay: 0.0001
+    batch_size: 64
+    max_epochs: 200
+    patience: 20
+    lr_patience: 10
+    lr_factor: 0.5

@@ -170,6 +170,51 @@ The TUAB counterpart of the fixed 8-cell Wiener phase/coherence experiment is `b
 - Script 12 discovers ERN `.set` recordings, creates one deterministic subject holdout, selects phase/model/decision threshold using training subjects only, and first generates held-out ECMAD features after those choices are frozen. Its 211 features use a 19-channel ERP layout plus 8 symmetric pairs, distinct from the TUEP/TUAB `_STANDARD_19` layout.
 - Script 12's phase grid comes from `erp_core.phase_search.phase_start/phase_stop/phase_step` and includes the exact stop value (currently π). `--workers` controls subject processes for ECMAD/feature generation and XGBoost threads per fit; one subject process handles all requested phases sequentially with native threads capped at one.
 
+### Automatic ERP-CORE ECMAD with EEGNet (script 25)
+
+`eeg_bg.auto_ecmad.AutoECMADPipeline` is a standalone ERP-CORE ERN workflow;
+`scripts/25_optimize_erp_core_ecmad_eegnet.py` exposes
+`prepare/search/train/evaluate/predict/all`. It reuses the numerical ECMAD core
+and EEGNet backbone without changing existing ERP training defaults. See the
+root README's automatic ECMAD section and `docs/auto_ecmad.md` for commands.
+
+- Config: `configs/erp_core_auto_ecmad_eegnet.yaml`, with a top-level
+  `auto_ecmad` section; the `_3ch.yaml` overlay selects FP1/F3/C3 with the same
+  subjects, splits and maximum 200-epoch budget. Default data: `~/Data/ERP_CORE`.
+- Stage one fits a fresh **two-channel** EEGNet per ordered target/reference,
+  receiving only target `[coherent, specific]`. It selects references using
+  internal-selection subject-equal, class-weighted BCE; ties within `1e-6`
+  follow configured channel order. Search cannot load outer validation/test
+  recordings. Raw fixes all event/trial rejection decisions before model-channel
+  selection; changing the channel subset does not change that rejection mask.
+- Stage two freezes all references, merges internal partitions, then fits new
+  selected `2n`-channel and Raw `n`-channel models. Components are interleaved
+  per target, coherent then specific. Validation AUPRC selects checkpoints;
+  validation balanced accuracy freezes thresholds before test loading.
+- Decomposition always starts from original continuous data: 12-second 50%
+  overlap-add, phasegated 1 rad, `nperseg=250`, no power/protected-band gate.
+  ERN preprocessing is 60 Hz notch, 0.5–45 Hz, 250 Hz. Candidate fits remain
+  serial; `--workers` only parallelizes raw preparation.
+- All caches, manifests, candidates, mapping, final/Raw models and inference
+  bundle live under `paths.results_dir` / `--output-dir`, independent of the
+  legacy cache tree. Fingerprint mismatches require a new directory or
+  `all --force`; completed candidates resume, interrupted candidates restart.
+- `scripts/run_auto_ecmad_training_job.py` is a POSIX supervisor with an advisory
+  output lock and `job_status.json`; it runs detailed analysis only after
+  successful training. `scripts/analyze_auto_ecmad_results.py` audits completed
+  artifacts and writes Markdown/HTML, CSVs, figures and paired subject-cluster
+  bootstrap intervals. Re-run analysis independently when training is complete.
+- Local validation: `results/auto_ecmad_ern_3ch/` completed six candidates plus
+  final/Raw fits on 2026-10-21, including unlabeled inference-bundle reload.
+  `results/auto_ecmad_ern/` is the interrupted 30-channel run (43 candidates),
+  and `results/auto_ecmad_real_smoke/` is the earlier one-epoch smoke test.
+  Do not resume the stopped run without a new user request or describe those
+  partial artifacts as complete results. The three-channel comparison did not
+  improve test classification metrics. Single-split task utility does not
+  establish physiological denoising quality or joint reference optimality.
+- `tests/test_auto_ecmad/` covers contracts, leakage boundaries, decomposition,
+  loss, fresh fitting, recovery/inference, interchangeable backends and analysis.
+
 ### Cache invalidation dependencies
 
 The pipeline is branched rather than a single linear tier chain:

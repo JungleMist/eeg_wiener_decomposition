@@ -11,17 +11,18 @@ TUH Abnormal EEG Corpus (TUAB) as downstream evaluation tracks.
 
 ## Table of Contents
 
-1. [Research Hypothesis](#research-hypothesis)
-2. [Core Methodology](#core-methodology)
-3. [Environment Setup](#environment-setup)
-4. [Project Structure](#project-structure)
-5. [Data Flow](#data-flow)
-6. [Configuration](#configuration)
-7. [Running the Pipeline](#running-the-pipeline)
-8. [Physical Verification Experiments](#physical-verification-experiments)
-9. [Visualization](#visualization)
-10. [Testing](#testing)
-11. [Package API](#package-api)
+1. [Automated ECMAD with EEGNet](#automated-ecmad-with-eegnet)
+2. [Research Hypothesis](#research-hypothesis)
+3. [Core Methodology](#core-methodology)
+4. [Environment Setup](#environment-setup)
+5. [Project Structure](#project-structure)
+6. [Data Flow](#data-flow)
+7. [Configuration](#configuration)
+8. [Running the Pipeline](#running-the-pipeline)
+9. [Physical Verification Experiments](#physical-verification-experiments)
+10. [Visualization](#visualization)
+11. [Testing](#testing)
+12. [Package API](#package-api)
 
 ---
 
@@ -83,10 +84,11 @@ launch `eeg_bg_studio.exe` without installing Python.
 |---------|--------|-----------------|--------------|----------------|
 | TUEP | 0 epilepsy, 1 control | patient | stratified patient split | scripts 01–08, 21–24 |
 | TUAB | 0 abnormal, 1 normal | recording | official eval = test; official train is patient-grouped into train/val | scripts 01–07 |
+| ERP-CORE ERN | 0 correct response, 1 error response | trial, with subject-separated partitions and per-subject reporting | deterministic nested subject holdouts | script 25, `eeg_bg.auto_ecmad` |
 
 For TUAB, script 01 extracts non-overlapping 20-second epochs from at most the first 20 minutes of each recording. Script 06 trains at epoch level, averages `P(normal)` within each `recording_id`, selects the record-level threshold on validation recordings, and applies that fixed threshold to official eval recordings. If one patient has both normal and abnormal recordings, they remain separate labeled evaluation units but are assigned together to train or validation.
 
-**CNN scope:** script 08 and the `eeg_bg/ml/cnn_*` modules are currently **TUEP-only**. `scripts/08_train_cnn.py --config configs/tuab.yaml` exits with a clear error; no TUAB CNN compatibility is implied by the shared epoch cache.
+**CNN scope:** script 08's cache-driven training workflow is **TUEP-only**. `scripts/08_train_cnn.py --config configs/tuab.yaml` exits with a clear error. The shared `cnn_model.EEGNet` backbone is also reused by the component experiments and the independent ERP-CORE automatic ECMAD backend below.
 
 Use `configs/default.yaml` for TUEP and `configs/tuab.yaml` for TUAB. The two configs use different cache and result roots.
 
@@ -113,6 +115,261 @@ Script 23 selects its checkpoint by validation patient AUPRC and freezes a
 validation patient balanced-accuracy threshold before one test evaluation.
 Script 24 uses patient-grouped XGBoost training, chooses the macro-F1 threshold
 on validation patients, and reports patient-level metrics and SHAP artifacts.
+
+---
+
+## Automated ECMAD with EEGNet
+
+[`eeg_bg.auto_ecmad`](eeg_bg/auto_ecmad/) is an independent, extensible two-stage
+training workflow. Its first adapter supports ERP-CORE response-locked ERN
+classification. Script 25 only parses arguments and invokes the package; it
+does not depend on scripts 01–08 or their caches. See the
+[specialist guide](docs/auto_ecmad.md) for additional implementation details.
+
+### Two-stage reference selection
+
+For every target channel $t$, enumerate every other channel $i$. Decompose the
+original preprocessed continuous target/reference pair and train a **fresh
+two-channel EEGNet using only `[coherent, specific]` from the target direction**:
+
+$$
+i_t^* = \operatorname*{arg\,min}_{i \ne t}
+\mathcal{L}_{\mathrm{inner\ selection}}
+\left(f_{\hat\theta_{t,i}}([c_{t,i,\mathrm{coherent}},
+c_{t,i,\mathrm{specific}}]), y\right).
+$$
+
+The candidate checkpoint and reference are selected by internal-selection loss.
+Loss differences within `1e-6` are resolved by configured reference-channel
+order. Once **all targets** finish, freeze the reference mapping and train a new
+EEGNet on the interleaved components in target-channel order:
+
+```text
+target1::coherent, target1::specific, target2::coherent, target2::specific, ...
+```
+
+The final input has `2n` channels. An independent `n`-channel Raw EEGNet uses the
+same subjects, trials and training protocol. Candidate weights are never reused
+for the final model. Decompositions always start from the original continuous
+signals; selected components are not cascaded or fused across references.
+References may repeat or form reciprocal pairs. Independent target selection
+does not guarantee the best joint combination or physiological denoising quality.
+
+| Configuration | Original channels | Candidate fits | Final / Raw channels | Total fits | Default result root |
+|---|---|---:|---|---:|---|
+| [`erp_core_auto_ecmad_eegnet_3ch.yaml`](configs/erp_core_auto_ecmad_eegnet_3ch.yaml) | FP1, F3, C3 | 6 | 6 / 3 | 8 | `results/auto_ecmad_ern_3ch/` |
+| [`erp_core_auto_ecmad_eegnet.yaml`](configs/erp_core_auto_ecmad_eegnet.yaml) | 30 EEG channels | 870 | 60 / 30 | 872 | `results/auto_ecmad_ern/` |
+
+The three-channel overlay changes only the channel list and result directory;
+it retains all eligible subjects and the full 200-epoch maximum budget. Create
+another config directly under `configs/` to change `auto_ecmad.adapter.channels`
+or select subjects. At least two channels and five eligible subjects are needed.
+
+### Data isolation and default training rules
+
+Subject splits use seed `42`: 20% test, then 20% of the remaining subjects for
+external validation, then 20% of the external-training subjects for internal
+selection. Holdout counts round up while retaining a nonempty fitting group.
+The four subject groups are disjoint. Preparation fixes eligibility, response
+events, labels, raw-derived rejection masks and unique trial IDs for every
+candidate; search loads only internal-fit and internal-selection recordings.
+
+Stage-one loss averages class-weighted BCE within each subject and then averages
+equally across subjects. Weights are `w0=1`, `w1=N0/N1`, computed from the current
+fitting trials only and reused for selection. Every candidate resets the model,
+optimizer, RNG and data order with the same seed and budget. Stage two merges
+both internal groups as external training, selects its checkpoint by external
+validation AUPRC, and freezes the validation balanced-accuracy threshold. Both
+final and Raw models must be frozen before test data are loaded for evaluation.
+
+| Setting | Default |
+|---|---|
+| ERP preprocessing | 60 Hz notch, 0.5–45 Hz bandpass, 250 Hz sampling |
+| ERN epochs / baseline | `[-0.6, 0.4] s` / `[-0.4, -0.2] s` |
+| Shared artifact rejection | Raw EEG peak-to-peak threshold 250 µV; evaluated before selecting the model-channel subset |
+| Continuous ECMAD | 12-second windows, 50% overlap-add, `nperseg=250` |
+| ECMAD admission | `phasegated`, phase threshold **1 rad**, coherence threshold 0, power gate disabled, no protected band |
+| Numerical handling | Existing stability checks and coefficient cap retained; protected windows use `coherent=0, specific=raw`, with diagnostics; nonfinite inputs/losses fail |
+| Normalization | Baseline correction, then independent z-score per trial and channel |
+| EEGNet | `F1=8`, `D=2`, `dropout=0.25` |
+| Optimization | Adam, learning rate 0.001, weight decay 0.0001, batch size 64 |
+| Stopping / scheduler | Maximum 200 epochs; patience 20; plateau patience 10, learning-rate factor 0.5 |
+
+`specific + coherent ≈ raw` is checked before baseline/normalization. Training
+consumes trial tensors `(trials, channels, times)`; reconstruction identity is
+not expected after separately normalizing the two components.
+
+### Run the three-channel workflow
+
+Keep paired EEGLAB `.set`/`.fdt` files and ERP event annotations under
+`~/Data/ERP_CORE/sub-*/eeg/`. Run from the repository root after installing the
+package into `eeg_pipeline` (see [Environment Setup](#environment-setup)):
+
+```bash
+conda run --no-capture-output -n eeg_pipeline python \
+  scripts/25_optimize_erp_core_ecmad_eegnet.py all \
+  --config configs/erp_core_auto_ecmad_eegnet_3ch.yaml \
+  --data-dir ~/Data/ERP_CORE --device mps
+
+conda run -n eeg_pipeline python scripts/analyze_auto_ecmad_results.py \
+  --results-dir results/auto_ecmad_ern_3ch
+```
+
+Use `--device cpu` or `--device cuda` for other hardware; `auto` chooses
+CUDA, MPS, then CPU. Fits run **one model at a time**. `--workers N` controls raw
+recording preparation threads, not simultaneous training or GPU count. Pin CUDA
+devices externally with `CUDA_VISIBLE_DEVICES` when needed.
+
+`all` executes `prepare → search → train → evaluate`; detailed analysis is the
+separate command above. Each stage can also be resumed independently, with the
+same configuration and overrides on every invocation:
+
+```bash
+conda run -n eeg_pipeline python scripts/25_optimize_erp_core_ecmad_eegnet.py prepare --config configs/erp_core_auto_ecmad_eegnet_3ch.yaml --device mps
+conda run -n eeg_pipeline python scripts/25_optimize_erp_core_ecmad_eegnet.py search --config configs/erp_core_auto_ecmad_eegnet_3ch.yaml --device mps
+conda run -n eeg_pipeline python scripts/25_optimize_erp_core_ecmad_eegnet.py train --config configs/erp_core_auto_ecmad_eegnet_3ch.yaml --device mps
+conda run -n eeg_pipeline python scripts/25_optimize_erp_core_ecmad_eegnet.py evaluate --config configs/erp_core_auto_ecmad_eegnet_3ch.yaml --device mps
+```
+
+The complete CLI is `[prepare|search|train|evaluate|predict|all]`, with
+`--config`, `--data-dir`, `--output-dir`, `--device`, `--workers` and `--force`.
+`predict` additionally accepts `--bundle`. Omitting `--config` selects the
+**30-channel, 872-fit** configuration; use the explicit three-channel config
+for the smaller run.
+
+For supervised execution that automatically analyzes successful training:
+
+```bash
+conda run --no-capture-output -n eeg_pipeline python \
+  scripts/run_auto_ecmad_training_job.py \
+  --config configs/erp_core_auto_ecmad_eegnet_3ch.yaml \
+  --output-dir results/auto_ecmad_ern_3ch --device mps
+```
+
+This POSIX supervisor uses an advisory lock, writes `job_status.json` and
+separate `training.log` / `analysis.log`, and records the exact child command,
+PIDs, fixed device, timestamps and exit status. On macOS, prefix its `python`
+command with `caffeinate -i` to keep an unattended run awake. Interrupting the
+supervisor also stops its child and marks the job interrupted. Analysis can be
+rerun independently without retraining when training is already complete.
+
+### Artifacts, resumption and analysis
+
+All auto_ecmad artifacts, including prepared caches, live under the configured
+`paths.results_dir` or `--output-dir` (the inherited `paths.cache_dir` is not
+used by this package):
+
+| Artifact | Purpose |
+|---|---|
+| `resolved_config.json`, `prepared.json`, `prepared/` | Effective config, source fingerprints, pickle-free continuous caches |
+| `split_manifest.csv`, `trial_manifest.csv`, `excluded_recordings.json` | Fixed participants/trials and exclusion reasons (subject groups also saved in `prepared.json`) |
+| `candidates/`, `candidate_scores.csv` | Per-candidate checkpoint, completion status, history, score and decomposition diagnostics |
+| `selected_mapping.json` | Frozen target/reference mapping, selection scores, top-two loss margins and channel order |
+| `models/`, `summary.json`, `report.md` | Final/Raw checkpoints and histories, validation/test predictions, frozen thresholds and metrics |
+| `bundle/` | Selected model, mapping, preprocessing/config, normalization and checksummed manifest |
+| `analysis/` | Audited report, detailed tables, paired uncertainty and figures |
+
+Atomic completion records and checksums protect resumption. A completed candidate
+with a matching fingerprint is reused; an interrupted candidate starts again.
+Fingerprints include source data, preprocessing/events, channels/trials/splits,
+decomposition, `target_components_only`, training settings, package/backend code
+and dependency versions. Changing these requires `all --force` or a new output
+directory. Keep device overrides consistent between stages and avoid concurrent
+writers to one result directory.
+
+Detailed analysis audits the complete candidate grid, frozen mappings,
+checksums, trial alignment and reported metrics before writing
+`analysis/report.md` and a self-contained `analysis/report.html`. It includes:
+
+- Trial and individual-subject AUROC, AUPRC, F1, balanced accuracy and confusion matrices.
+- `model_metrics.csv`, `selected_references.csv`, candidate rankings, training lengths and top-two loss gaps.
+- `paired_cluster_bootstrap.csv`: paired test-subject cluster bootstrap of Selected minus Raw, default 1,000 repetitions and seed 42.
+- Six PNG/PDF figures: candidate losses, selected references, test ROC/PR, confusion matrices, training curves and calibration.
+
+Bootstrap intervals condition on these frozen models and the observed test
+subjects; they do not measure uncertainty from retraining, reference selection
+or new splits. A single seed/split classification result is indirect evidence
+of task utility and cannot establish removal of artifacts or preservation of
+physiological sources.
+
+### Inference and extension APIs
+
+```bash
+conda run -n eeg_pipeline python scripts/25_optimize_erp_core_ecmad_eegnet.py predict \
+  --bundle results/auto_ecmad_ern_3ch/bundle \
+  --data-dir /path/to/new/ERP_CORE --device cpu \
+  --output-dir results/auto_ecmad_new_predictions
+```
+
+The saved reference mapping and decision threshold stay fixed. ECMAD
+coefficients adapt to each new continuous recording. Outcome labels are
+optional; the ERP adapter still needs stimulus/response annotations to locate
+response-locked windows. The bundle validates channel order, epoch grid and
+artifact checksums.
+
+```python
+from eeg_bg.auto_ecmad import AutoECMADPipeline
+
+pipeline = AutoECMADPipeline("configs/erp_core_auto_ecmad_eegnet_3ch.yaml")
+# Independent stage API: prepare(), search(), fit(), evaluate(), predict().
+# run() performs preparation through evaluation.
+
+inference = AutoECMADPipeline.from_bundle(
+    "results/auto_ecmad_ern_3ch/bundle",
+    data_dir="/path/to/new/ERP_CORE", device="cpu",
+    output_dir="results/auto_ecmad_new_predictions",
+)
+predictions = inference.predict()
+```
+
+[`types.py`](eeg_bg/auto_ecmad/types.py) defines constructor-injected
+`DatasetAdapter`, `PairDecomposer` and `ModelTrainer` protocols. Continuous
+records use `(channels, samples)` in µV; `TrialBatch` uses
+`(trials, channels, times)`, stable subject/trial IDs and optional labels.
+The MNE boundary converts units. Trainer fitting receives only fit/selection
+batches, with separate prediction/evaluation operations. Dataset, model and
+search extensions can reuse the pipeline; the built-in backends currently
+implement ERP-CORE, EEGNet and exhaustive search only. Existing ERP training
+interfaces keep their previous defaults.
+
+### Verified three-channel run and research limits
+
+The **2026-10-21 MPS run completed all eight fits** using the full default
+training budget: 37 eligible subjects, 11,815 shared trials and 8 test subjects
+(1,671 trials). The frozen references were `FP1 → C3`, `F3 → FP1`, `C3 → FP1`.
+Final/Raw checkpoints came from epochs 31/44 and stopped after 51/64 epochs.
+Reloading the bundle without test labels reproduced every decision and matched
+evaluation probabilities within `1.2e-16`.
+
+| Test metric | Raw (3 channels) | Selected ECMAD (6 channels) | Selected − Raw, subject-bootstrap 95% CI |
+|---|---:|---:|---|
+| AUROC | 0.8377 | 0.8327 | −0.0050 [−0.0300, 0.0136] |
+| AUPRC | 0.4839 | 0.4778 | −0.0062 [−0.0411, 0.0166] |
+| F1 | 0.5219 | 0.4688 | −0.0532 [−0.1151, 0.0149] |
+| Balanced accuracy | 0.7502 | 0.7441 | −0.0061 [−0.0519, 0.0276] |
+
+This run demonstrates a working search/training/evaluation/inference path;
+these metrics do **not show improved classification utility**. More false
+positives accompanied higher error-response recall. Validation checkpoint and
+threshold selection, only eight test subjects, and a single seed/split limit
+the conclusions. Independent target selection also leaves joint optimality
+unresolved. Review the local `results/auto_ecmad_ern_3ch/analysis/report.html`
+for the complete analysis; generated results/models are gitignored.
+
+The 30-channel run in `results/auto_ecmad_ern/` was stopped at the user's request
+after 43 completed candidates and has no complete final result. The earlier
+`results/auto_ecmad_real_smoke/` used five subjects and one epoch; it verifies
+execution only and is distinct from the completed three-channel experiment.
+
+Regression tests cover directed decomposition, phase/numerical safeguards,
+reconstruction, subject-equal loss, strict two-channel candidates, split/trial
+isolation, fresh training, deterministic ranking, cache corruption/invalidation,
+unlabeled bundle reload, alternative adapter/trainer implementations and
+EEGNet forward/backward passes at 2/60 channels:
+
+```bash
+conda run -n eeg_pipeline python -m pytest tests/test_auto_ecmad -q
+```
 
 ---
 
@@ -329,6 +586,12 @@ D:\eeg_background_seizure\
 │   │   ├── wiener.py                ← Vector Wiener filter (core method)
 │   │   ├── wiener_scalar.py         ← Fixed scalar ablation (comparison baseline)
 │   │   └── ica.py                   ← FastICA decomposition via MNE (comparison method)
+│   ├── auto_ecmad/                  ← Two-stage EEGNet-guided directed-reference search
+│   │   ├── types.py, pipeline.py    ← Dataset/model protocols, isolation and stage scheduling
+│   │   ├── decomposition.py        ← Directed continuous ECMAD and ordered trial components
+│   │   ├── search.py, training.py   ← Candidate ranking, independent EEGNet fitting/evaluation
+│   │   ├── artifacts.py            ← Fingerprints, atomic completion and inference bundles
+│   │   └── adapters/erp_core.py     ← ERN preparation, shared events and raw trial masks
 │   ├── verification/
 │   │   ├── coherence.py             ← V1: pairwise coherence reduction
 │   │   └── transitivity.py          ← V2: transitivity constraint, V3: frequency variation
@@ -361,10 +624,15 @@ D:\eeg_background_seizure\
 │   ├── 05_run_visualization.py      ← Step 5: cached results → waveform + PSD figures
 │   ├── 06_train_xgboost.py         ← Step 6: feature extraction + XGBoost × 3 conditions + SHAP
 │   ├── 07_organize_experiment.py   ← Step 7: archive config + results → experiments/<timestamp>/
-│   └── 08_train_cnn.py             ← Step 8: EEGNet CNN trained directly on raw epoch tensors → results/cnn/
+│   ├── 08_train_cnn.py             ← Step 8: EEGNet CNN trained directly on raw epoch tensors → results/cnn/
+│   ├── 25_optimize_erp_core_ecmad_eegnet.py ← Automatic ECMAD prepare/search/train/evaluate/predict
+│   ├── run_auto_ecmad_training_job.py     ← Supervise training, then run analysis
+│   └── analyze_auto_ecmad_results.py      ← Audit artifacts, report metrics/uncertainty and figures
 │
 ├── configs/
-│   └── default.yaml                 ← All tunable parameters (including ml: section)
+│   ├── default.yaml                 ← Shared pipeline parameters (including ml: section)
+│   ├── erp_core_auto_ecmad_eegnet.yaml     ← 30-channel exhaustive automatic ECMAD configuration
+│   └── erp_core_auto_ecmad_eegnet_3ch.yaml ← FP1/F3/C3 overlay with unchanged training budget
 │
 ├── tests/
 │   ├── conftest.py                  ← Synthetic EEG fixtures (no real data needed)
@@ -372,6 +640,7 @@ D:\eeg_background_seizure\
 │   ├── test_io/                     ← dataset, edf_reader, annotation, cache
 │   ├── test_preprocessing/          ← epoch slicing, reference detection
 │   ├── test_decomposition/          ← wiener, wiener_scalar, ica
+│   ├── test_auto_ecmad/             ← Two-stage isolation, training, resume, inference and analysis
 │   ├── test_verification/           ← coherence V1, transitivity V2/V3
 │   ├── test_features/               ← band_power, hjorth, spectral_entropy, extraction, asymmetry, wavelet, connectivity, complexity, temporal_stats (72 tests)
 │   ├── test_ml/                     ← xgb_pipeline, shap_analysis, CNN model/dataset/training (31 tests)
