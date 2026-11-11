@@ -41,6 +41,7 @@ SCRIPT22_SCHEMA_VERSION = 1
 COMBINED_CONDITION = "specific_coherent"
 BASE_CONDITIONS = ("raw", "specific", "coherent")
 CONDITIONS = (*BASE_CONDITIONS, COMBINED_CONDITION)
+COMPONENT_CONDITIONS = ("coherent", "specific", COMBINED_CONDITION)
 
 
 def _release_condition_memory() -> None:
@@ -503,11 +504,15 @@ def main(
     out_root = Path(cfg["paths"]["results_dir"]) / "tuep_component_xgboost"
     out_root.mkdir(parents=True, exist_ok=True)
     source_meta = {**source_meta, "requested_mode": mode}
+    selected = {
+        "all": CONDITIONS,
+        "components": COMPONENT_CONDITIONS,
+    }.get(condition, (condition,))
     resolved = dict(cfg)
     resolved["tuep_component_xgboost"] = {
         "input_dir": str(input_root), "output_dir": str(out_root),
         "requested_mode": mode, "source_fingerprint": source_fingerprint,
-        "conditions": list(CONDITIONS), "aggregation_unit": "patient",
+        "conditions": list(selected), "aggregation_unit": "patient",
         "threshold_selection": "validation_patient_macro_f1",
         "specific_coherent_layout": "channel_axis_specific_then_coherent",
         "positive_label": "1=control",
@@ -515,7 +520,6 @@ def main(
     (out_root / "config_resolved.yaml").write_text(
         yaml.safe_dump(resolved, sort_keys=False), encoding="utf-8"
     )
-    selected = CONDITIONS if condition == "all" else (condition,)
     results = []
     for item in selected:
         try:
@@ -542,7 +546,10 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--condition", choices=[*CONDITIONS, "all"], default="all")
+    parser.add_argument(
+        "--condition", choices=[*CONDITIONS, "components", "all"], default="all",
+        help="components trains coherent, specific, and specific_coherent",
+    )
     parser.add_argument("--feature-set", choices=list(PROFILES), default="base211")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--workers", type=_positive_int, default=None)
