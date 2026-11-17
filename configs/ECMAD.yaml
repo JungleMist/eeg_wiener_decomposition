@@ -1,0 +1,24 @@
+extends: tuep_phase005.yaml
+
+paths:
+  data_root: ~/Data/ds003478-1.1.0
+  results_dir: results/ds003478_ecmad_bdi20_13_avgref
+
+channels:
+  standard_19: [FP1, FP2, F7, F3, Fz, F4, F8, T3, C3, Cz, C4, T4, T5, P3, Pz, P4, T6, O1, O2]
+  channel_groups:
+    - [FP1, FP2, F7, F3, Fz, F4, F8]
+    - [F3, T3, C3, Cz, T5, P3]
+    - [F4, T4, C4, T6, P4]
+    - [P3, P4, Pz, O1, O2]
+
+ds003478:
+  phase_thresholds_rad: [0.02, 0.05, 0.1, 1.0]
+  bdi_depressing_min: 20
+  bdi_healthy_max: 13
+  random_state: 42
+  test_fraction: 0.2
+  validation_fraction_within_development: 0.2
+  feature_profile: base211_conn80
+  eegnet_shap_samples: 64
+  eegnet_shap_background_subjects: 32

@@ -61,6 +61,8 @@ def train_xgboost(
     y_val: np.ndarray,
     cfg: dict,
     groups: list[str] | np.ndarray | None = None,
+    *,
+    grid_n_jobs: int | None = None,
 ) -> xgb.XGBClassifier:
     """Train an XGBoost classifier using grid search + early-stopping refit.
 
@@ -73,6 +75,8 @@ def train_xgboost(
         Phase 2 (never for hyperparameter selection).
     cfg : dict
         Loaded ``default.yaml``.  Reads ``cfg["ml"]["xgboost"]``.
+    grid_n_jobs : int or None
+        Optional CPU grid-search worker count, independent of estimator threads.
 
     Returns
     -------
@@ -121,8 +125,9 @@ def train_xgboost(
 
     # GPU context cannot be shared across sklearn parallel workers; run folds
     # sequentially when CUDA is the compute device.
-    gs_n_jobs = 1 if fixed_params.get("device", "cpu") == "cuda" \
-        else fixed_params.get("n_jobs", -1)
+    gs_n_jobs = fixed_params.get("n_jobs", -1) if grid_n_jobs is None else grid_n_jobs
+    if fixed_params.get("device", "cpu") == "cuda":
+        gs_n_jobs = 1
 
     base_model = xgb.XGBClassifier(**fixed_params)
     grid = GridSearchCV(
