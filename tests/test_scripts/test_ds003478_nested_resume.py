@@ -50,6 +50,17 @@ def test_completed_xgb_fold_skips_fit_and_incomplete_fold_restarts(tmp_path):
         (tmp_path / "complete.json").unlink()
         nested.train_xgb_fold(tmp_path, x, rows, x, rows, {}, {}, 30)
         assert Model.fits == 2
-        (tmp_path / "model.ubj").write_text("corrupt")
+        assert {f.name for f in tmp_path.iterdir()} == {"complete.json", "validation.csv"}
+        (tmp_path / "validation.csv").write_text("corrupt")
         nested.train_xgb_fold(tmp_path, x, rows, x, rows, {}, {}, 30)
         assert Model.fits == 3
+
+def test_legacy_weight_cleanup_preserves_validation(tmp_path):
+    path = tmp_path / "search/candidate_001/fold_0"
+    path.mkdir(parents=True)
+    for name in ["validation.csv", "model.ubj", "scaler.joblib"]:
+        (path / name).write_text(name)
+    nested.seal(path, ["validation.csv", "model.ubj", "scaler.joblib"])
+    nested.migrate_search(tmp_path)
+    assert nested.complete(path)
+    assert {f.name for f in path.iterdir()} == {"complete.json", "validation.csv"}

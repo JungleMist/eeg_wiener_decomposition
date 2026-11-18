@@ -40,15 +40,12 @@ def complete(directory, marker="complete.json"):
         return False
 
 
-def train_xgb_fold(path, train_x, train_rows, val_x, val_rows, fixed, params, rounds):
-    import joblib
+def train_xgb_fold(path, train_x, train_rows, val_x, val_rows, fixed, params, rounds, *, need_model=False):
     from xgboost import XGBClassifier
 
     path.mkdir(parents=True, exist_ok=True)
-    if complete(path):
-        model = XGBClassifier()
-        model.load_model(path / "model.ubj")
-        return model, joblib.load(path / "scaler.joblib"), pd.read_csv(path / "validation.csv")
+    if complete(path) and not need_model:
+        return None, None, pd.read_csv(path / "validation.csv")
     scaler = StandardScaler().fit(train_x)
     model = XGBClassifier(**fixed, **params, n_estimators=500,
                           early_stopping_rounds=rounds)
@@ -56,13 +53,41 @@ def train_xgb_fold(path, train_x, train_rows, val_x, val_rows, fixed, params, ro
               eval_set=[(scaler.transform(val_x), val_rows.label)], verbose=False)
     predictions = pipeline.subject_predictions(
         val_rows, model.predict_proba(scaler.transform(val_x))[:, 1])
-    model.save_model(path / "model.tmp.ubj")
-    (path / "model.tmp.ubj").replace(path / "model.ubj")
-    joblib.dump(scaler, path / "scaler.tmp")
-    (path / "scaler.tmp").replace(path / "scaler.joblib")
-    pipeline.atomic_write(path / "validation.csv", predictions.to_csv(index=False).encode())
-    seal(path, ["model.ubj", "scaler.joblib", "validation.csv"])
+    if not need_model:
+        pipeline.atomic_write(path / "validation.csv", predictions.to_csv(index=False).encode())
+        seal(path, ["validation.csv"])
     return model, scaler, predictions
+
+
+def clean_weights(target):
+    """Remove temporary weights after their outputs have been sealed."""
+    for directory in target.glob("inner_*"):
+        if complete(directory / "outer"):
+            for name in ("best_model.pt", "last_training.pt", "model.ubj", "scaler.joblib"):
+                (directory / name).unlink(missing_ok=True)
+
+
+
+def migrate_search(target):
+    """Convert legacy candidate checkpoints before discarding their model files."""
+    for model_file in target.glob("search/candidate_*/fold_*/*"):
+        if model_file.name not in {"model.ubj", "scaler.joblib", "model.tmp.ubj", "scaler.tmp"}:
+            continue
+        fold = model_file.parent
+        marker = fold / "complete.json"
+        if marker.exists():
+            try:
+                hashes = json.loads(marker.read_text())
+            except ValueError:
+                hashes = {}
+            if "model.ubj" in hashes:
+                predictions = fold / "validation.csv"
+                if predictions.exists() and hashlib.sha256(predictions.read_bytes()).hexdigest() == hashes.get("validation.csv"):
+                    save(marker, {"validation.csv": hashes["validation.csv"]})
+                else:
+                    marker.unlink()
+        model_file.unlink(missing_ok=True)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -111,8 +136,20 @@ def main():
     with (out / ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         manifest = out / "manifest.json"
-        if manifest.exists() and json.loads(manifest.read_text()) != identity:
-            raise ValueError("Existing fold has a different configuration or implementation")
+        if manifest.exists():
+            previous = json.loads(manifest.read_text())
+            implementation = previous.get("implementation", {})
+            old_hash = implementation.get("run_ds003478_nested_cv.py")
+            if old_hash in {
+                "0024b43f9d8cdb066adfbfc03daec58d188a5111131987ce5d23670cf228c9bb",
+                "d7c7f9f9c2981b2ceb2e49ede57fcb775abf76508310476bb95fb36dff67fc22",
+            }:
+                implementation["run_ds003478_nested_cv.py"] = identity["implementation"]["run_ds003478_nested_cv.py"]
+                if previous == identity and args.method == "xgboost":
+                    for condition, _, _ in pipeline.condition_specs(cfg):
+                        migrate_search(out / condition)
+            if previous != identity:
+                raise ValueError("Existing fold has a different configuration or implementation")
         save(manifest, identity)
         for condition, keys, _ in pipeline.condition_specs(cfg):
             if args.condition not in ("all", condition):
@@ -120,14 +157,13 @@ def main():
             target = out / condition
             target.mkdir(exist_ok=True)
             if complete(target, "result_complete.json"):
+                clean_weights(target)
                 continue
             run_condition(args, cfg, records, folds, held, keys, target)
 
 
 def run_condition(args, cfg, records, folds, held, keys, target):
     import torch
-    import joblib
-    from xgboost import XGBClassifier
     from eeg_bg.ml.cnn_model import EEGNet
     from eeg_bg.ml.erp_eegnet import select_balanced_accuracy_threshold
     from eeg_bg.ml.xgb_pipeline import find_optimal_threshold
@@ -168,6 +204,7 @@ def run_condition(args, cfg, records, folds, held, keys, target):
             print(target.name, "candidate", candidate, "inner AP", score, flush=True)
             if score > best_score:
                 best_score, selected_models, oof = score, models, predictions
+                best_params = params
                 save(target / "selection.json", {"params": params, "mean_inner_auprc": score})
         threshold = find_optimal_threshold(pd.concat(oof, ignore_index=True))
     else:
@@ -184,12 +221,8 @@ def run_condition(args, cfg, records, folds, held, keys, target):
             if not complete(path, "training_complete.json"):
                 pipeline.fit_eegnet(args.cache, path, rows, keys, cfg,
                                     torch.device("cuda"), args.workers, compute_shap=False)
-                seal(path, ["best_model.pt", "validation_predictions.csv"],
-                     "training_complete.json")
-            checkpoint = torch.load(path / "best_model.pt", map_location="cpu", weights_only=True)
-            model = EEGNet(**checkpoint["architecture"])
-            model.load_state_dict(checkpoint["state_dict"])
-            selected_models.append((model.cuda().eval(), None))
+                seal(path, ["validation_predictions.csv"], "training_complete.json")
+            selected_models.append((None, None))
             oof.append(pd.read_csv(path / "validation_predictions.csv"))
         frame = pd.concat(oof, ignore_index=True)
         threshold = select_balanced_accuracy_threshold(frame.true_label.to_numpy(), frame.pred_proba.to_numpy())
@@ -206,17 +239,40 @@ def run_condition(args, cfg, records, folds, held, keys, target):
         explanation = path / "outer"
         explanation.mkdir(exist_ok=True)
         if complete(explanation):
+            clean_weights(target)
             scores.append(np.load(explanation / "probabilities.npy", allow_pickle=False))
             continue
         if method == "xgboost":
+            (train_x, train_rows), (val_x, val_rows) = data
+            fixed = dict(cfg["ml"]["xgboost"]["fixed"])
+            counts = np.bincount(train_rows.label.astype(int))
+            fixed.update(device="cuda", tree_method="hist", n_jobs=args.workers,
+                         scale_pos_weight=float(counts[0] / counts[1]))
+            if model is None:
+                model, scaler, _ = train_xgb_fold(
+                    target / "search" / "selected" / f"fold_{index}",
+                    train_x, train_rows, val_x, val_rows, fixed, best_params,
+                    cfg["ml"]["xgboost"]["early_stopping_rounds"], need_model=True,
+                )
             x = scaler.transform(test_x)
             scores.append(model.predict_proba(x)[:, 1])
-            model.save_model(path / "model.ubj")
-            joblib.dump(scaler, path / "scaler.joblib")
             values = compute_shap_values(model.get_booster()[:model.best_iteration + 1], x, [])
             pipeline.write_npz(explanation / "outer_shap.npz", {"values": values})
             test_rows.to_csv(explanation / "outer_shap_epochs.csv", index=False)
         else:
+            checkpoint_path = path / "best_model.pt"
+            if not checkpoint_path.exists():
+                fold = folds[index]
+                rows = records[records.participant_id != held].copy()
+                rows["split"] = np.where(rows.participant_id.isin(fold["train"]), "train", "validation")
+                duplicate = rows[rows.split == "validation"].copy()
+                duplicate["split"] = "test"
+                pipeline.fit_eegnet(args.cache, path, pd.concat([rows, duplicate], ignore_index=True),
+                                    keys, cfg, torch.device("cuda"), args.workers, compute_shap=False)
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            model = EEGNet(**checkpoint["architecture"])
+            model.load_state_dict(checkpoint["state_dict"])
+            model = model.cuda().eval()
             with torch.no_grad():
                 scores.append(torch.cat([
                     model(batch.cuda().unsqueeze(1)).flatten().cpu()
@@ -233,6 +289,7 @@ def run_condition(args, cfg, records, folds, held, keys, target):
                   else ["shap_test.npz", "shap_test_epochs.csv", "shap_background_epochs.csv",
                         "shap_channel_importance.csv", "shap_summary.png"])
         seal(explanation, names)
+        clean_weights(target)
     probability = float(np.mean(scores))
     save(target / "result.json", {"participant_id": held, "true_label": int(outer.label.iloc[0]),
                                  "pred_proba": probability, "threshold": float(threshold),

@@ -35,9 +35,9 @@ python scripts/summarize_ds003478_nested_cv.py --cache /data/ecmad_cache --outpu
 
 重复原命令并保持 --cache、--output、--method、--outer-index 和配置一致，即可恢复。无需额外 resume 开关。Slurm 超时后重新提交对应 array task 即可。一个外层折有文件锁，进程退出后由操作系统释放。
 
-XGBoost 在 search/candidate_NNN/fold_N 下保存模型、scaler、验证预测，全部写完后才写带 SHA256 的 complete.json。恢复会检查哈希，复用完整折，重做缺失或损坏折。搜索仍按原顺序比较分数，确保平分时的选择规则一致。单次拟合中途退出时重跑该次拟合，上限 500 轮。保留全部候选折模型会增加磁盘占用，请在服务器首折完成后估算完整实验磁盘需求。
+XGBoost 候选折仅落盘验证预测和校验标记。运行中保留当前最佳候选的模型于内存。重启时复用验证预测；若胜出模型已从内存释放，仅对尚需生成外层解释的胜出折重新拟合。兼容 dfe4c67 版本的外层清单；相同输入和配置下重新运行会逐折迁移旧候选预测并清理对应权重。
 
-EEGNet 每轮原子写入 last_training.pt，包括模型、优化器、scheduler、最佳检查点、历史、训练采样器和 CPU/GPU 随机状态。中途退出最多重跑当前未保存轮次。内层完成后写 training_complete.json，验证哈希后跳过该内层训练。损坏的 torch 检查点加载会报错，需移走相应 last_training.pt 后重跑该内层折。
+EEGNet 的 last_training.pt 和 best_model.pt 作为临时断点，支持逐 epoch 恢复。对应外层预测与 SHAP 校验完成后自动删除。完成的实验保留预测、指标、SHAP、划分和验证记录。更新服务器脚本前应先结束旧训练进程，再用原命令和原结果目录恢复。
 
 外层解释保存到 inner_N/outer，包含该模型的预测和 SHAP。完成标记只在全部文件写完后生成。重启跳过完整模型的解释，中途退出只重做当前模型的解释。EEGNet 外层最多两个 epoch，所以无需进一步拆分 SHAP 批次。结果 result_complete.json 校验最终结果和所有外层解释；汇总入口拒绝未完成或损坏的结果。
 
