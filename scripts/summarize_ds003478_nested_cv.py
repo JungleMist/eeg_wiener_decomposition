@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 from sklearn.metrics import roc_auc_score, average_precision_score, balanced_accuracy_score, f1_score
 import ECMAD as p
-from run_ds003478_nested_cv import complete
+from run_ds003478_nested_cv import XGBOOST_PROTOCOL, complete
 from eeg_bg.config.settings import load_config
 
 a = argparse.ArgumentParser()
@@ -12,6 +12,9 @@ a.add_argument('--cache', type=Path, required=True)
 a.add_argument('--output', type=Path, required=True)
 args = a.parse_args()
 expected = set(p.read_records(args.cache).participant_id)
+for manifest in (args.output / 'xgboost').glob('outer_*/manifest.json'):
+    if json.loads(manifest.read_text()).get('xgboost_protocol') != XGBOOST_PROTOCOL:
+        raise RuntimeError(f'Incompatible XGBoost protocol: {manifest}')
 summary = []
 for method in ('eegnet', 'xgboost'):
     for condition, _, _ in p.condition_specs(load_config('configs/ECMAD.yaml')):

@@ -30,37 +30,31 @@ def test_completed_xgb_fold_skips_fit_and_incomplete_fold_restarts(tmp_path):
     class Model:
         fits = 0
         def __init__(self, **kwargs):
-            pass
-        def fit(self, *args, **kwargs):
+            assert kwargs == {"device": "cuda", "n_jobs": 4}
+        def fit(self, x, y):
             Model.fits += 1
         def predict_proba(self, x):
             return np.tile([0.7, 0.3], (len(x), 1))
-        def save_model(self, path):
-            path.write_text("model")
-        def load_model(self, path):
-            assert path.read_text() == "model"
 
     x = np.arange(12).reshape(4, 3)
     rows = pd.DataFrame({"participant_id": ["a", "a", "b", "b"], "label": [0, 0, 1, 1]})
     with patch.dict(sys.modules, {"xgboost": SimpleNamespace(XGBClassifier=Model)}):
-        first = nested.train_xgb_fold(tmp_path, x, rows, x, rows, {}, {}, 30)[2]
-        second = nested.train_xgb_fold(tmp_path, x, rows, x, rows, {}, {}, 30)[2]
+        first = nested.train_xgb_fold(tmp_path, x, rows, x, rows, 4)[2]
+        second = nested.train_xgb_fold(tmp_path, x, rows, x, rows, 4)[2]
         pd.testing.assert_frame_equal(first, second)
         assert Model.fits == 1
         (tmp_path / "complete.json").unlink()
-        nested.train_xgb_fold(tmp_path, x, rows, x, rows, {}, {}, 30)
+        nested.train_xgb_fold(tmp_path, x, rows, x, rows, 4)
         assert Model.fits == 2
         assert {f.name for f in tmp_path.iterdir()} == {"complete.json", "validation.csv"}
         (tmp_path / "validation.csv").write_text("corrupt")
-        nested.train_xgb_fold(tmp_path, x, rows, x, rows, {}, {}, 30)
+        nested.train_xgb_fold(tmp_path, x, rows, x, rows, 4)
         assert Model.fits == 3
 
-def test_legacy_weight_cleanup_preserves_validation(tmp_path):
-    path = tmp_path / "search/candidate_001/fold_0"
-    path.mkdir(parents=True)
-    for name in ["validation.csv", "model.ubj", "scaler.joblib"]:
-        (path / name).write_text(name)
-    nested.seal(path, ["validation.csv", "model.ubj", "scaler.joblib"])
-    nested.migrate_search(tmp_path)
-    assert nested.complete(path)
-    assert {f.name for f in path.iterdir()} == {"complete.json", "validation.csv"}
+        original = (tmp_path / "validation.csv").read_bytes()
+        model, scaler, _ = nested.train_xgb_fold(tmp_path, x, rows, x, rows, 4, need_model=True)
+        assert isinstance(model, Model)
+        assert scaler.n_features_in_ == x.shape[1]
+        assert Model.fits == 4
+        assert (tmp_path / "validation.csv").read_bytes() == original
+        assert nested.complete(tmp_path)

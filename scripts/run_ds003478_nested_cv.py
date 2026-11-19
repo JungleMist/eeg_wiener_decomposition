@@ -8,10 +8,13 @@ import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold, ParameterGrid
+from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 import ECMAD as pipeline
 from eeg_bg.config.settings import load_config
+
+
+XGBOOST_PROTOCOL = "library_defaults_v1"
 
 
 def save(path, value):
@@ -40,17 +43,15 @@ def complete(directory, marker="complete.json"):
         return False
 
 
-def train_xgb_fold(path, train_x, train_rows, val_x, val_rows, fixed, params, rounds, *, need_model=False):
+def train_xgb_fold(path, train_x, train_rows, val_x, val_rows, workers, *, device="cuda", need_model=False):
     from xgboost import XGBClassifier
 
     path.mkdir(parents=True, exist_ok=True)
     if complete(path) and not need_model:
         return None, None, pd.read_csv(path / "validation.csv")
     scaler = StandardScaler().fit(train_x)
-    model = XGBClassifier(**fixed, **params, n_estimators=500,
-                          early_stopping_rounds=rounds)
-    model.fit(scaler.transform(train_x), train_rows.label,
-              eval_set=[(scaler.transform(val_x), val_rows.label)], verbose=False)
+    model = XGBClassifier(device=device, n_jobs=workers)
+    model.fit(scaler.transform(train_x), train_rows.label)
     predictions = pipeline.subject_predictions(
         val_rows, model.predict_proba(scaler.transform(val_x))[:, 1])
     if not need_model:
@@ -68,27 +69,6 @@ def clean_weights(target):
 
 
 
-def migrate_search(target):
-    """Convert legacy candidate checkpoints before discarding their model files."""
-    for model_file in target.glob("search/candidate_*/fold_*/*"):
-        if model_file.name not in {"model.ubj", "scaler.joblib", "model.tmp.ubj", "scaler.tmp"}:
-            continue
-        fold = model_file.parent
-        marker = fold / "complete.json"
-        if marker.exists():
-            try:
-                hashes = json.loads(marker.read_text())
-            except ValueError:
-                hashes = {}
-            if "model.ubj" in hashes:
-                predictions = fold / "validation.csv"
-                if predictions.exists() and hashlib.sha256(predictions.read_bytes()).hexdigest() == hashes.get("validation.csv"):
-                    save(marker, {"validation.csv": hashes["validation.csv"]})
-                else:
-                    marker.unlink()
-        model_file.unlink(missing_ok=True)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", type=Path, required=True)
@@ -98,10 +78,14 @@ def main():
     parser.add_argument("--outer-index", type=int, required=True)
     parser.add_argument("--condition", default="all")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     args = parser.parse_args()
-    import torch
-    if not torch.cuda.is_available():
-        raise RuntimeError("This entry point requires CUDA")
+    if args.method == "eegnet" and args.device != "cuda":
+        parser.error("EEGNet requires --device cuda")
+    if args.device == "cuda":
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is unavailable; XGBoost can use --device cpu")
     cfg = load_config(args.config)
     frozen = json.loads((args.cache / "run_config.json").read_text())
     for key in ("channels", "preprocessing", "wiener", "ds003478"):
@@ -133,6 +117,10 @@ def main():
                     for directory in ("epochs", "features")
                     for file in sorted((args.cache / directory).glob("*.npz"))
                 ]}
+    if args.method == "xgboost":
+        import xgboost
+        identity.update(xgboost_protocol=XGBOOST_PROTOCOL, xgboost_version=xgboost.__version__,
+                        xgboost_device=args.device)
     with (out / ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         manifest = out / "manifest.json"
@@ -140,14 +128,14 @@ def main():
             previous = json.loads(manifest.read_text())
             implementation = previous.get("implementation", {})
             old_hash = implementation.get("run_ds003478_nested_cv.py")
-            if old_hash in {
+            if args.method == "eegnet" and old_hash in {
+                "b65f1f2bcc4d863c66dbd5c86d63e6aa144902afb8e7ab03d923747e6aaaa65d",
                 "0024b43f9d8cdb066adfbfc03daec58d188a5111131987ce5d23670cf228c9bb",
                 "d7c7f9f9c2981b2ceb2e49ede57fcb775abf76508310476bb95fb36dff67fc22",
             }:
                 implementation["run_ds003478_nested_cv.py"] = identity["implementation"]["run_ds003478_nested_cv.py"]
-                if previous == identity and args.method == "xgboost":
-                    for condition, _, _ in pipeline.condition_specs(cfg):
-                        migrate_search(out / condition)
+            if args.method == "xgboost" and previous.get("xgboost_protocol") != XGBOOST_PROTOCOL:
+                raise ValueError("Existing XGBoost fold uses a different protocol; use a new --output directory")
             if previous != identity:
                 raise ValueError("Existing fold has a different configuration or implementation")
         save(manifest, identity)
@@ -183,29 +171,13 @@ def run_condition(args, cfg, records, folds, held, keys, target):
         ))
     selected_models, oof = [], []
     if method == "xgboost":
-        grid = dict(cfg["ml"]["xgboost"]["param_grid"])
-        grid.pop("n_estimators", None)
-        best_score = -np.inf
-        for candidate, params in enumerate(ParameterGrid(grid)):
-            models, predictions = [], []
-            for fold_index, ((train_x, train_rows), (val_x, val_rows)) in enumerate(inner):
-                fixed = dict(cfg["ml"]["xgboost"]["fixed"])
-                counts = np.bincount(train_rows.label.astype(int))
-                fixed.update(device="cuda", tree_method="hist", n_jobs=args.workers,
-                             scale_pos_weight=float(counts[0] / counts[1]))
-                path = target / "search" / f"candidate_{candidate:03d}" / f"fold_{fold_index}"
-                model, scaler, prediction = train_xgb_fold(
-                    path, train_x, train_rows, val_x, val_rows, fixed, params,
-                    cfg["ml"]["xgboost"]["early_stopping_rounds"],
-                )
-                predictions.append(prediction)
-                models.append((model, scaler))
-            score = float(np.mean([pipeline.validation_ap(frame) for frame in predictions]))
-            print(target.name, "candidate", candidate, "inner AP", score, flush=True)
-            if score > best_score:
-                best_score, selected_models, oof = score, models, predictions
-                best_params = params
-                save(target / "selection.json", {"params": params, "mean_inner_auprc": score})
+        for index, ((train_x, train_rows), (val_x, val_rows)) in enumerate(inner):
+            path = target / f"inner_{index}"
+            model, scaler, predictions = train_xgb_fold(
+                path, train_x, train_rows, val_x, val_rows, args.workers, device=args.device,
+            )
+            selected_models.append((model, scaler))
+            oof.append(predictions)
         threshold = find_optimal_threshold(pd.concat(oof, ignore_index=True))
     else:
         # Reuse TUEP training, including subject-equal loss and checkpoint selection.
@@ -243,20 +215,14 @@ def run_condition(args, cfg, records, folds, held, keys, target):
             scores.append(np.load(explanation / "probabilities.npy", allow_pickle=False))
             continue
         if method == "xgboost":
-            (train_x, train_rows), (val_x, val_rows) = data
-            fixed = dict(cfg["ml"]["xgboost"]["fixed"])
-            counts = np.bincount(train_rows.label.astype(int))
-            fixed.update(device="cuda", tree_method="hist", n_jobs=args.workers,
-                         scale_pos_weight=float(counts[0] / counts[1]))
             if model is None:
+                (train_x, train_rows), (val_x, val_rows) = data
                 model, scaler, _ = train_xgb_fold(
-                    target / "search" / "selected" / f"fold_{index}",
-                    train_x, train_rows, val_x, val_rows, fixed, best_params,
-                    cfg["ml"]["xgboost"]["early_stopping_rounds"], need_model=True,
+                    path, train_x, train_rows, val_x, val_rows, args.workers, device=args.device, need_model=True,
                 )
             x = scaler.transform(test_x)
             scores.append(model.predict_proba(x)[:, 1])
-            values = compute_shap_values(model.get_booster()[:model.best_iteration + 1], x, [])
+            values = compute_shap_values(model.get_booster(), x, [])
             pipeline.write_npz(explanation / "outer_shap.npz", {"values": values})
             test_rows.to_csv(explanation / "outer_shap_epochs.csv", index=False)
         else:

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ds003478 · ECMAD 嵌套交叉验证实验配置</title>
+<style>
+:root{color-scheme:light;--ink:#193041;--muted:#516674;--line:#cedde2;--paper:#f3f7f8;--blue:#075e70}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.7 system-ui,sans-serif}
+header,main,footer{max-width:1000px;margin:auto;padding:26px clamp(16px,5vw,55px)}
+header{padding-top:50px;padding-bottom:14px}h1{font-size:clamp(28px,5vw,49px);line-height:1.22;margin:.25em 0}h2{font-size:1.38rem;margin:0 0 .45em}h3{font-size:1.06rem;margin-top:1.2em}
+small,.meta,footer{color:var(--muted)}a{color:var(--blue)}code,pre{font-family:ui-monospace,monospace;font-size:.88em}code{overflow-wrap:anywhere}
+nav{display:flex;flex-wrap:wrap;gap:4px 18px;margin:24px 0 0}
+section{background:white;border:1px solid var(--line);border-radius:14px;margin:0 0 18px;padding:clamp(15px,4vw,30px)}
+p{margin:.55em 0 1em}ul,ol{padding-left:1.45em}li+li{margin-top:.35em}
+.scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.94em}caption{text-align:left;font-weight:700;padding:.35em 0}th,td{padding:.52em .7em;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}thead th{background:#e8f2f3}
+pre{background:#133043;color:#f4f8fa;padding:16px;overflow:auto;border-radius:8px;line-height:1.55}pre code{font-size:inherit;overflow-wrap:normal}
+.note{border-left:4px solid var(--blue);padding:.55em .9em;background:#eef6f6}.label{font-weight:750;color:var(--blue);letter-spacing:.05em}
+@media print{body{background:white;font-size:10pt}section{border:0;padding:8px 0}header,main,footer{padding:10px}pre{white-space:pre-wrap;color:black;background:#eee}thead{display:table-header-group}tr{break-inside:avoid}}
+</style>
+</head>
+<body>
+<header>
+<div class="label">OPENNEURO DS003478 · SNAPSHOT 1.1.0</div>
+<h1>ECMAD 嵌套交叉验证实验配置</h1>
+<p>评估不同 ECMAD 相位阈值及信号成分对静息态 EEG 的 BDI 分组识别及 SHAP 归因的影响。</p>
+<p class="meta">2026-11-18 · 实现基线 <code>dcb3c13</code> + XGBoost 默认参数改动 · 外层 106 折 × 内层 5 折 · 13 条件 × 2 模型</p>
+<nav aria-label="章节导航"><a href="#cohort">数据与标签</a><a href="#ecmad">预处理与 ECMAD</a><a href="#cv">交叉验证</a><a href="#train">训练参数</a><a href="#eval">指标与 SHAP</a><a href="#run">服务器命令</a><a href="#resume">恢复与产物</a><a href="#sources">依据</a></nav>
+</header>
+<main>
+<section id="cohort">
+<h2>数据与标签</h2>
+<p>读取 <code>participants.tsv</code> 的 <code>BDI</code>，按 <code>participant_id</code> 为全部静息态记录赋标签。BDI ≥20 为 <code>depressing</code>（1），BDI ≤13 为 <code>healthy</code>（0），中间区间或缺失排除。标签表示本实验的 BDI 分组。</p>
+<div class="scroll"><table>
+<caption>按现有 <code>subject_split.csv</code> 核对的受试者数</caption>
+<thead><tr><th scope="col">历史固定划分</th><th scope="col">低 BDI</th><th scope="col">高 BDI</th><th scope="col">合计</th></tr></thead>
+<tbody><tr><th scope="row">训练</th><td>48</td><td>19</td><td>67</td></tr>
+<tr><th scope="row">验证</th><td>12</td><td>5</td><td>17</td></tr>
+<tr><th scope="row">测试</th><td>16</td><td>6</td><td>22</td></tr>
+<tr><th scope="row">合并为嵌套 CV 队列</th><td>76</td><td>30</td><td>106</td></tr></tbody>
+</table></div>
+<p>122 人、243 条静息态记录，排除 16 人（15 人处于中间区间，1 人 BDI 缺失）。按现有 <code>recordings.csv</code>，纳入者合计 2,531 个保留 EEG 窗，其中 105 人有两条可用记录，1 人有一条。缓存记录原固定划分（种子 42，先留 20% 测试，再从开发集留 20% 验证），嵌套 CV 合并三个纳入分区重新划分。</p>
+</section>
+<section id="ecmad">
+<h2>预处理与 ECMAD 条件</h2>
+<p><strong>通道固定顺序</strong>　FP1, FP2, F7, F3, Fz, F4, F8, T3, C3, Cz, C4, T4, T5, P3, Pz, P4, T6, O1, O2。读取时以 T7/T8/P7/P8 对应 T3/T4/T5/T6。</p>
+<ol>
+<li>从 EEGLAB <code>.set/.fdt</code> 读取静息态记录，抽取 19 通道并做 19 导平均重参考。执行 0.5–40 Hz IIR 带通，再重采样至 125 Hz。</li>
+<li>从记录起点提取互不重叠的 20 秒窗（2,500 点）；全窗任一通道的绝对峰值超过 200 µV 即剔除。所有条件共用该保留掩码。<code>raw</code> 保存预处理后、ECMAD 分解前的数据。</li>
+<li>对连续通过剔除规则的片段分别执行 ECMAD。每个阈值独立从同一原始片段计算，20 秒 Hann 加权窗，50% 重叠相加，避免分解跨越剔除间隙。<code>coherent = raw − specific</code>。</li>
+</ol>
+<div class="scroll"><table>
+<thead><tr><th scope="col">通道组</th><th scope="col">组成</th></tr></thead>
+<tbody>
+<tr><th scope="row">1</th><td>FP1, FP2, F7, F3, Fz, F4, F8</td></tr>
+<tr><th scope="row">2</th><td>F3, T3, C3, Cz, T5, P3</td></tr>
+<tr><th scope="row">3</th><td>F4, T4, C4, T6, P4</td></tr>
+<tr><th scope="row">4</th><td>P3, P4, Pz, O1, O2</td></tr>
+</tbody></table></div>
+<p>ECMAD 使用通道组矩阵自适应向量 Wiener 分解（<code>phasegated</code>），以零相位为中心做相位门控。估计窗 500 点（4 秒），频带 0.5–40 Hz，相干度阈值 0.15，滤波器幅值上限 50，重叠通道组按相干度加权融合。5–20 Hz 保护频带从相干候选评分和相干重建中排除。群组功率门关闭。</p>
+<div class="scroll"><table>
+<caption>条件名与缓存键规则</caption>
+<thead><tr><th scope="col">阈值（rad）</th><th scope="col">条件名</th></tr></thead>
+<tbody>
+<tr><th scope="row">对照</th><td><code>raw</code></td></tr>
+<tr><th scope="row">0.02</th><td><code>phase_0.02_specific</code>、<code>phase_0.02_coherent</code>、<code>phase_0.02_specific_coherent</code></td></tr>
+<tr><th scope="row">0.05</th><td><code>phase_0.05_specific</code>、<code>phase_0.05_coherent</code>、<code>phase_0.05_specific_coherent</code></td></tr>
+<tr><th scope="row">0.1</th><td><code>phase_0.1_specific</code>、<code>phase_0.1_coherent</code>、<code>phase_0.1_specific_coherent</code></td></tr>
+<tr><th scope="row">1.0</th><td><code>phase_1_specific</code>、<code>phase_1_coherent</code>、<code>phase_1_specific_coherent</code></td></tr>
+</tbody></table></div>
+<p>拼接顺序固定为 specific 在前、coherent 在后。EEGNet 沿通道轴拼接为 38 通道，XGBoost 分别提取两组成分特征后沿特征轴拼接。</p>
+</section>
+<section id="cv">
+<h2>受试者级嵌套交叉验证</h2>
+<ol>
+<li>外层按 <code>participant_id</code> 排序，依次留出 1 名受试者（索引 0–105），剩余 105 名用于开发。</li>
+<li>在每个外层开发集上使用五折分层交叉验证，<code>shuffle=True</code>，随机种子 42。受试者的所有记录与 EEG 窗始终同折。两种模型与 13 个条件共享划分。</li>
+<li>各内层训练、验证只使用开发集。模型选择结束后，将五个验证折的受试者预测合并，用于为该方法、条件及外层折冻结阈值。训练入口在选择结束后才加载外层测试矩阵。准备阶段的缓存预先按记录独立生成。</li>
+<li>外层测试使用五个内层模型集成。先对五模型的 EEG 窗概率等权平均，再对该受试者的保留 EEG 窗等权平均。记录有不同窗数时，各记录对受试者概率的权重随窗数变化。用冻结阈值生成外层二分类标签。</li>
+</ol>
+<p class="note">EEGNet 内层验证用于早停和阈值选择，XGBoost 内层验证用于阈值选择。外层留出用于评估整套决策流程。13 条件是独立评估的比较项，依据外层表现再挑选最佳条件会带来选择偏差。</p>
+</section>
+<section id="train">
+<h2>训练参数</h2>
+<p>配置继承链 <code>ECMAD.yaml → tuep_phase005.yaml → default.yaml</code>。以下记录嵌套运行入口实际使用的参数。</p>
+<div class="scroll"><table>
+<thead><tr><th scope="col">设置</th><th scope="col">EEGNet</th><th scope="col">XGBoost</th></tr></thead>
+<tbody>
+<tr><th scope="row">输入</th><td>19 × 2,500，拼接组 38 × 2,500。每个窗每通道独立 z-score，标准差下限 10<sup>−6</sup>。</td><td><code>base211_conn80</code>（291 维，拼接组 582 维）。211 维基础特征含通道频谱/时序统计及半球不对称，另加 80 维相干度和 PLV。连接特征 <code>nperseg=250</code>。StandardScaler 仅拟合内层训练窗。</td></tr>
+<tr><th scope="row">架构／目标</th><td>F1=8，D=2，F2=16，dropout=0.25。受试者等权、按训练类别加权的 BCE。</td><td><code>XGBClassifier</code> 的库默认目标和超参数。仅设置 <code>device</code>（默认 CUDA，XGBoost 可用 <code>--device cpu</code>）和 <code>n_jobs</code>。</td></tr>
+<tr><th scope="row">优化</th><td>Adam，初始学习率 0.001，weight decay 0.0001，窗 minibatch 64，每次更新聚合 4 名受试者，DataLoader workers=0。</td><td>每内层折拟合一次，使用库默认的树数和训练设置，无早停或手动类别权重。<code>n_jobs</code> 由 <code>--workers</code> 指定。</td></tr>
+<tr><th scope="row">选择</th><td>最多 200 epoch，早停耐心 20，保存内层验证受试者 AP 最佳模型。ReduceLROnPlateau 监控同一指标，耐心 10，倍率 0.5。</td><td>五个内层模型均用于外层推理。</td></tr>
+<tr><th scope="row">训练种子</th><td>42 + 条件偏移，raw/specific/coherent/拼接分别为 43/44/45/46。各相位同类成分共享种子。</td><td>由 XGBoost 库默认行为决定。</td></tr>
+<tr><th scope="row">冻结阈值</th><td>内层受试者折外预测最大化 balanced accuracy。并列时选离 0.5 最近者，再选较小者。</td><td>内层受试者折外预测最大化 macro F1。并列时保留先遇到的最优阈值。</td></tr>
+</tbody></table></div>
+<p>两种阈值搜索均使用 0.05–0.95 上的 181 个等距候选。预测概率大于或等于阈值时判为高 BDI 组。</p>
+<p>XGBoost 无网格搜索。两种模型各有 106 × 13 × 5 = 6,890 次基础拟合，合计 13,780 次。这些数字不含中断重拟合及 SHAP 计算。复现时应固定 XGBoost 版本。</p>
+</section>
+<section id="eval">
+<h2>分类指标与 SHAP</h2>
+<p>按方法和条件收齐各 106 名受试者的外层折外预测，再计算 AUROC、average precision（汇总列 <code>auprc</code>）、balanced accuracy 和高 BDI 正类 F1。<code>comparison.csv</code> 预期 26 行；其 F1 与 XGBoost 选阈值所用 macro F1 定义不同。</p>
+<div class="scroll"><table>
+<thead><tr><th scope="col">方法</th><th scope="col">每个内层模型的外层解释</th><th scope="col">产物</th></tr></thead>
+<tbody>
+<tr><th scope="row">EEGNet</th><td>GradientExplainer，来自内层训练集的最多 32 名受试者，每人 1 窗作为背景。每位外层受试者最多解释 2 窗，每窗 64 次梯度采样。解释概率输出。</td><td><code>shap_test.npz</code>（通道 × 时间归因及名称）、背景和测试窗索引、通道重要度 CSV 及 PNG。</td></tr>
+<tr><th scope="row">XGBoost</th><td>对完整 booster 应用 TreeSHAP，解释外层全部保留窗。归因为 log-odds 尺度。特征顺序按 <code>base211_conn80</code>，拼接组按两组成分分别排列。</td><td><code>outer_shap.npz</code>（归因矩阵）和 <code>outer_shap_epochs.csv</code>（窗索引）。</td></tr>
+</tbody></table></div>
+<p>嵌套汇总脚本只生成分类指标和折外预测。若要做总体成分比较，可从各折 SHAP 先在受试者内对窗及五个模型等权汇总，再在参与者间平均。在拼接组内分别计算 specific 与 coherent 的平均绝对归因及其占比，并在同模型内对照各阈值。两种解释尺度和采样范围不同，归因绝对值应分别报告。分类效能与归因反映 BDI 分组任务，单凭这些结果无法判断成分的生理或伪迹来源。</p>
+</section>
+<section id="run">
+<h2>CUDA 服务器执行方式</h2>
+<p>在服务器的项目根目录执行。使用 Python 3.11 的 <code>eeg_pipeline</code> 环境及 CUDA 版 PyTorch 和 XGBoost。仓库 <code>requirements.txt</code> 记录依赖版本。缓存与结果路径以下均相对于项目根目录，运行账户须有写权限。</p>
+<pre><code>conda activate eeg_pipeline
+python -m pip install -e .
+export CUDA_VISIBLE_DEVICES=0
+export MPLBACKEND=Agg
+
+python scripts/ECMAD.py prepare \
+  --data-dir /home/sujunhang/Data/ds003478-1.1.0 \
+  --output-dir cache/ecmad_cache --workers 8
+python scripts/prepare_ds003478_nested_features.py \
+  --cache cache/ecmad_cache --workers 8
+
+bash &lt;&lt;'BASH'
+set -euo pipefail
+for method in eegnet xgboost; do
+  for ((fold=0; fold&lt;106; fold++)); do
+    python scripts/run_ds003478_nested_cv.py \
+      --cache cache/ecmad_cache \
+      --output results/ds003478-1.1.0-nested \
+      --method "$method" --outer-index "$fold" --workers 4
+  done
+done
+python scripts/summarize_ds003478_nested_cv.py \
+  --cache cache/ecmad_cache --output results/ds003478-1.1.0-nested
+BASH</code></pre>
+<p>多 GPU 可在缓存准备结束后按方法提交两个 Slurm array（每组 <code>0-105</code>，每任务一块 GPU），把 <code>--outer-index</code> 设为 <code>"$SLURM_ARRAY_TASK_ID"</code>，并让调度器分配 GPU。全部任务结束后运行汇总。预估资源时，需同时考虑拟合时间、五折数据载入峰值内存，以及内层验证预测、校验标记和 SHAP 的磁盘与 inode 用量。</p>
+</section>
+<section id="resume">
+<h2>续跑、权重与产物</h2>
+<div class="scroll"><table>
+<thead><tr><th scope="col">层级</th><th scope="col">文件或行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">预处理与特征缓存</th><td><code>run_config.json</code>、<code>subject_split.csv</code>、<code>recordings.csv</code>、<code>epochs/</code>、<code>features/</code>。缓存迁移用保留时间戳的方式，例如 <code>rsync -a</code>，迁移后检查配置与外层清单的相容性。</td></tr>
+<tr><th scope="row">外层折</th><td><code>&lt;method&gt;/outer_NNN/manifest.json</code> 保存留出受试者、内层划分、有效配置、记录表哈希、依赖脚本哈希和缓存文件名、大小、mtime。同一方法同一折有独占锁。</td></tr>
+<tr><th scope="row">XGBoost</th><td><code>inner_N/</code> 保存验证预测和带 SHA-256 的完成标记。已验证内层预测在重启时复用。若某个内层模型已从内存释放且对应外层解释未完成，只重拟合该模型。旧网格搜索结果与默认参数协议不兼容，应使用新的结果目录。</td></tr>
+<tr><th scope="row">EEGNet</th><td><code>last_training.pt</code> 每轮原子写入，含模型、优化器、学习率调度器、随机状态和历史。<code>best_model.pt</code> 供外层预测和 SHAP 使用。两者均为临时文件，在对应外层解释校验完成后删除。内层保留训练历史和验证预测。</td></tr>
+<tr><th scope="row">条件结果</th><td><code>inner_oof_predictions.csv</code>、<code>frozen_selection.json</code>、<code>result.json</code>、<code>result_complete.json</code>。每个 <code>inner_N/outer/</code> 保存 <code>probabilities.npy</code>、SHAP 与校验标记。</td></tr>
+<tr><th scope="row">最终汇总</th><td><code>&lt;method&gt;_&lt;condition&gt;_oof.csv</code> 与 <code>comparison.csv</code>。汇总检查每个结果的完成哈希以及受试者是否齐全、是否重复。</td></tr>
+</tbody></table></div>
+<p>中断后用原命令、原缓存和原结果路径重启，无需额外 <code>--resume</code>。已校验的条件和外层解释会跳过。配置或实现不匹配时应使用独立结果目录。EEGNet 中断期间的临时文件会留作续跑；完成后预测、指标与归因仍可复核，重新推理则需要重新拟合。</p>
+</section>
+<section id="sources">
+<h2>核对依据与验证范围</h2>
+<ul>
+<li><a href="../configs/ECMAD.yaml">ECMAD.yaml</a>、<a href="../configs/tuep_phase005.yaml">tuep_phase005.yaml</a> 和 <a href="../configs/default.yaml">default.yaml</a> 提供有效参数。</li>
+<li><a href="../scripts/ECMAD.py">ECMAD.py</a>、<a href="../scripts/prepare_ds003478_nested_features.py">特征准备</a>、<a href="../scripts/run_ds003478_nested_cv.py">嵌套运行入口</a>、<a href="../scripts/summarize_ds003478_nested_cv.py">分类汇总入口</a>确定实际行为。本报告描述在 <code>dcb3c13</code> 基础上应用默认参数改动后的实现。</li>
+<li>本地历史固定划分结果目录 <code>results/ds003478_ecmad_bdi20_13_avgref</code> 中的 <code>subject_split.csv</code> 与 <code>recordings.csv</code> 用于核对队列和窗数。</li>
+<li>默认参数及断点策略通过本地模拟测试。本文记录实验配置与操作流程，完整 CUDA 嵌套实验的结果和端到端恢复尚未验证。</li>
+</ul>
+</section>
+</main>
+<footer>ds003478 v1.1.0 · ECMAD · 实验配置与复现记录</footer>
+</body>
+</html>
