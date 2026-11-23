@@ -9,7 +9,6 @@ from sklearn.metrics import average_precision_score, balanced_accuracy_score, f1
 
 import ECMAD as p
 from eeg_bg.config.settings import load_config
-from eeg_bg.features.band_power import BANDS
 from eeg_bg.features.profiles import PROFILES
 from run_ds003478_nested_cv import XGBOOST_PROTOCOL, complete
 
@@ -73,22 +72,24 @@ def summarize_shap(paths, rows, method, keys, cfg, epoch_counts):
     })
 
 
-def group_importance(importance, by):
-    groups = importance.groupby(by, sort=False).agg(
-        sum_mean_abs_shap=("mean_abs_shap", "sum"),
-        mean_abs_shap_per_item=("mean_abs_shap", "mean"),
-        n_items=("mean_abs_shap", "size"),
-    ).reset_index()
-    total = groups.sum_mean_abs_shap.sum()
-    groups["share_of_condition"] = groups.sum_mean_abs_shap / total if total else np.nan
-    return groups
-
-
-def feature_band(name):
-    feature = name.rsplit(":", 1)[-1]
-    parts = feature.split("_")
-    band = parts[-2] if parts[-1] == "power" else parts[-1]
-    return band if band in BANDS else "non_band"
+def condition_shap_summary(importance, method, condition):
+    """Average channels/features within the condition and its component banks."""
+    groups = list(importance.groupby("component", sort=False))
+    if len(groups) > 1:
+        groups.insert(0, ("all", importance))
+    return pd.DataFrame([
+        {
+            "method": method,
+            "condition": condition,
+            "component": component,
+            "mean_abs_shap": values.mean_abs_shap.mean(),
+            "n_items": len(values),
+            "n_subjects": values.n_subjects.iloc[0],
+            "n_epoch_model_pairs": values.n_epoch_model_pairs.iloc[0],
+            "unit": values.unit.iloc[0],
+        }
+        for component, values in groups
+    ])
 
 
 def write_csv(path, frame):
@@ -115,7 +116,7 @@ def main():
         if stored["config"]["ds003478"]["feature_profile"] != cfg["ds003478"]["feature_profile"]:
             raise RuntimeError(f"XGBoost feature profile mismatch: {manifest}")
 
-    comparison, oof_tables, shap_tables, components, bands = [], {}, [], [], []
+    comparison, oof_tables, shap_tables = [], {}, {}
     for method in ("eegnet", "xgboost"):
         for condition, keys, _ in p.condition_specs(cfg):
             paths = sorted((args.output / method).glob(f"outer_*/{condition}/result.json"))
@@ -128,17 +129,9 @@ def main():
             if not rows.participant_id.map(expected).eq(rows.true_label).all():
                 raise RuntimeError(f"Conflicting subject labels: {method}/{condition}")
             importance = summarize_shap(paths, rows, method, keys, cfg, epoch_counts)
-            importance.insert(0, "method", method)
-            importance.insert(1, "condition", condition)
-            importance.insert(2, "kind", "channel" if method == "eegnet" else "feature")
-            importance = importance.sort_values("mean_abs_shap", ascending=False, kind="stable")
-            importance.insert(3, "rank", np.arange(1, len(importance) + 1))
-            shap_tables.append(importance)
-            group_by = ["method", "condition", "unit", "n_subjects", "component"]
-            components.append(group_importance(importance, group_by))
-            if method == "xgboost":
-                importance_by_band = importance.assign(band=importance.name.map(feature_band))
-                bands.append(group_importance(importance_by_band, group_by + ["band"]))
+            shap_tables[f"{method}_{condition}.csv"] = condition_shap_summary(
+                importance, method, condition,
+            )
             oof_tables[f"{method}_{condition}_oof.csv"] = rows
             comparison.append(dict(
                 method=method, condition=condition,
@@ -152,9 +145,12 @@ def main():
     for name, rows in oof_tables.items():
         write_csv(args.output / name, rows)
     write_csv(args.output / "comparison.csv", pd.DataFrame(comparison))
-    write_csv(args.output / "shap_importance.csv", pd.concat(shap_tables, ignore_index=True))
-    write_csv(args.output / "shap_components.csv", pd.concat(components, ignore_index=True))
-    write_csv(args.output / "shap_xgboost_bands.csv", pd.concat(bands, ignore_index=True))
+    shap_dir = args.output / "shap_summary"
+    shap_dir.mkdir(exist_ok=True)
+    for name, frame in shap_tables.items():
+        write_csv(shap_dir / name, frame)
+    # Both model-specific raw tables are now written; remove the old combined output.
+    (shap_dir / "raw.csv").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

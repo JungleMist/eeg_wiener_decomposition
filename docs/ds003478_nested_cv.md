@@ -49,10 +49,9 @@ EEGNet 的 last_training.pt 和 best_model.pt 作为临时断点，支持逐 epo
 
 ## 跨折 SHAP 汇总
 
-上面的汇总命令在完整实验目录中运行即可，不需要 GPU、模型权重或重新训练。它读取每个外层受试者的五个 `inner_N/outer/` 归因数组和窗口索引，并验证输出哈希、受试者和标签、窗数、归因形状及 EEGNet 通道顺序。已有的 `*_oof.csv` 和 `comparison.csv` 仍会输出，另增加：
+上面的汇总命令在完整实验目录中运行即可，不需要 GPU、模型权重或重新训练。它读取每个外层受试者的五个 `inner_N/outer/` 归因数组和窗口索引，并验证输出哈希、受试者和标签、窗数、归因形状及 EEGNet 通道顺序。已有的 `*_oof.csv` 和 `comparison.csv` 仍会输出，另在 `<output>/shap_summary/` 输出 **26 张 CSV 表**：
 
-- `shap_importance.csv`：各方法和条件的通道（EEGNet）或特征（XGBoost）排名。
-- `shap_components.csv`：各信号成分的归因总量及组内占比。单成分组只有一个成分；拼接组分别列出 specific 与 coherent。
-- `shap_xgboost_bands.csv`：按成分和频带分组的特征归因。带功率、不对称和连接特征按名称标记的频带纳入，其余列为 `non_band`。
+- raw 基线分别输出 `eegnet_raw.csv` 和 `xgboost_raw.csv`，保留各自的概率和 log-odds 量纲。重新汇总时，旧版的合并基线表 `raw.csv` 会被这两张表替换。
+- 每种模型的 4 个相位 × 3 个处理条件各一张表，共 24 张，文件名为 `<method>_<condition>.csv`。
 
-先在每个模型内对窗（EEGNet 另对时间点）平均绝对 SHAP，再等权平均该受试者的五个模型，最后等权平均所有受试者。`share_of_condition` 是该组各项平均绝对 SHAP 的和占同条件总量的比例，总量为零时留空。两种模型分别使用概率和 log-odds 量纲。只传回原分类汇总 CSV 时，需在服务器原目录运行新版汇总，或将原始归因文件及其结果清单传回后再运行。
+先在每个模型内对窗（EEGNet 另对时间点）平均绝对 SHAP，再等权平均该受试者的五个模型和全部受试者。最后对条件内的通道（EEGNet）或特征（XGBoost）取算术平均。拼接组同时给出整体 `all` 和两个成分各自的均值。表中 `n_items` 表示纳入平均的通道或特征数。只传回原分类汇总 CSV 时，需在服务器原目录运行新版汇总，或将原始归因文件及其结果清单传回后再运行。

@@ -105,7 +105,7 @@ pre{background:#133043;color:#f4f8fa;padding:16px;overflow:auto;border-radius:8p
 <tr><th scope="row">EEGNet</th><td>GradientExplainer，来自内层训练集的最多 32 名受试者，每人 1 窗作为背景。每位外层受试者最多解释 2 窗，每窗 64 次梯度采样。解释概率输出。</td><td><code>shap_test.npz</code>（通道 × 时间归因及名称）、背景和测试窗索引、通道重要度 CSV 及 PNG。</td></tr>
 <tr><th scope="row">XGBoost</th><td>对完整 booster 应用 TreeSHAP，解释外层全部保留窗。归因为 log-odds 尺度。特征顺序按 <code>base211_conn80</code>，拼接组按两组成分分别排列。</td><td><code>outer_shap.npz</code>（归因矩阵）和 <code>outer_shap_epochs.csv</code>（窗索引）。</td></tr>
 </tbody></table></div>
-<p>嵌套汇总脚本生成分类指标、折外预测和三个跨折 SHAP 表：<code>shap_importance.csv</code>（通道或特征排名）、<code>shap_components.csv</code>（成分总量及占比）、<code>shap_xgboost_bands.csv</code>（成分与频带汇总）。绝对 SHAP 依次在窗内时间轴（EEGNet）、评估窗、同一受试者的五个模型及受试者之间取平均。两种解释尺度和采样范围不同，归因绝对值分别报告。分类效能与归因反映 BDI 分组任务，单凭这些结果无法判断成分的生理或伪迹来源。</p>
+<p>嵌套汇总脚本生成分类指标和折外预测，并在 <code>shap_summary/</code> 输出 26 张 SHAP 表。每个模型各有一张 raw 基线表及 4 个相位 × 3 个处理条件的 12 张表，统一命名为 <code>&lt;method&gt;_&lt;condition&gt;.csv</code>。绝对 SHAP 依次在窗内时间轴（EEGNet）、评估窗、同一受试者的五个模型及受试者之间取平均，最后对通道或特征取平均。拼接组保留整体与两个成分各自的均值。两种模型分别报告概率和 log-odds 尺度。</p>
 </section>
 <section id="run">
 <h2>CUDA 服务器执行方式</h2>
