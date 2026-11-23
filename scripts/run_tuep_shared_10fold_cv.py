@@ -365,7 +365,11 @@ def load_run(args, output, cache, device):
     }
     raw = configs["raw"]
     for stage, cfg in configs.items():
-        cfg["paths"]["data_root"] = str(args.data_dir)
+        cfg["paths"].update(
+            data_root=str(args.data_dir),
+            cache_dir=str(cache / stage),
+            results_dir=str(output / stage),
+        )
         if any(cfg[key] != raw[key] for key in ("dataset", "preprocessing")):
             raise ValueError(f"Shared TUEP preparation differs for {stage}")
         if cfg["channels"]["standard_19"] != raw["channels"]["standard_19"]:
@@ -418,7 +422,10 @@ def run(args, output, cache, status):
 
     device = resolve_device(args.device)
     configs, records, fingerprint = load_run(args, output, cache, device)
-    cache.mkdir(parents=True, exist_ok=True)
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except PermissionError as error:
+        raise PermissionError(f"Cannot create cache at {cache}. Set --cache-dir to a writable directory.") from error
     owner = cache / "owner.json"
     if owner.is_file():
         if read_json(owner) != {"fingerprint": fingerprint}:
@@ -521,8 +528,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path,
                         help="run directory; reuse it to resume an identical run")
-    parser.add_argument("--data-dir", type=Path, help="TUEP v3.1.0 root")
-    parser.add_argument("--cache-dir", type=Path, help="parent for isolated temporary caches")
+    parser.add_argument("--data-dir", type=Path,
+                        help="TUEP v3.1.0 root (default: paths.data_root in configs/default.yaml)")
+    parser.add_argument("--cache-dir", type=Path,
+                        help="temporary cache parent (default: paths.cache_dir in configs/default.yaml)")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--expected-patients", type=int, default=178,
@@ -534,14 +543,19 @@ def main():
         args.max_model_folds is not None and args.max_model_folds < 1
     ):
         parser.error("Require positive workers/pilot limit and at least 20 expected patients")
-    defaults = load_config(ROOT / "configs" / PHASES["0.01"])["paths"]
+    defaults = load_config(ROOT / "configs" / "default.yaml")["paths"]
     args.data_dir = (args.data_dir or Path(defaults["data_root"])).expanduser().resolve()
     output = args.output_dir.expanduser().resolve()
-    cache_parent = (args.cache_dir or Path(defaults["cache_dir"])).expanduser().resolve()
-    cache = cache_parent / f"tuep-10fold-{digest(str(output))[:24]}"
+    requested_cache = (args.cache_dir or Path(defaults["cache_dir"])).expanduser()
+    try:
+        cache_parent = requested_cache.resolve()
+        cache = cache_parent / f"tuep-10fold-{digest(str(output))[:24]}"
+        cache_is_symlink = cache.is_symlink()
+    except PermissionError:
+        parser.error(f"Cannot access cache parent {requested_cache}. Set --cache-dir to a writable directory.")
     if not args.data_dir.is_dir():
         parser.error(f"TUEP data directory does not exist: {args.data_dir}")
-    if output.is_relative_to(cache) or args.data_dir.is_relative_to(cache) or cache.is_symlink():
+    if output.is_relative_to(cache) or args.data_dir.is_relative_to(cache) or cache_is_symlink:
         parser.error("The run and the TUEP dataset must be outside the temporary cache subtree")
     output.mkdir(parents=True, exist_ok=True)
     with (output / "run.lock").open("a") as lock:
