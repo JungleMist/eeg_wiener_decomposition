@@ -308,7 +308,10 @@ def _load_patient(patient: dict[str, Any], condition: str) -> dict[str, Any]:
     record_cache_ids: list[np.ndarray] = []
     for record in patient["records"]:
         with np.load(record["path"], allow_pickle=False) as data:
-            values = np.asarray(data[condition], dtype=np.float32)
+            if condition == COMBINED_CONDITION and condition not in data:
+                values = np.concatenate((data["specific"], data["coherent"]), axis=1)
+            else:
+                values = np.asarray(data[condition], dtype=np.float32)
             epochs.append(values)
             starts.append(np.asarray(data["epoch_start_samples"], dtype=np.int64))
             starts_sec.append(np.asarray(data["epoch_start_sec"], dtype=np.float64))
@@ -579,6 +582,7 @@ def train_condition(
     condition: str, patients: list[dict[str, Any]], model_cfg: dict,
     condition_dir: Path, random_state: int, resolved_device: str,
     workers: int, fingerprint: str,
+    *, fixed_threshold: float | None = None,
 ) -> dict[str, Any]:
     splits = {
         split: [patient for patient in patients if patient["split"] == split]
@@ -645,10 +649,12 @@ def train_condition(
         model, splits["validation"], condition, device,
         batch_size, workers, random_state,
     )
-    threshold = select_balanced_accuracy_threshold(
-        val_predictions["true_label"].to_numpy(),
-        val_predictions["pred_proba"].to_numpy(),
-    )
+    threshold = fixed_threshold
+    if threshold is None:
+        threshold = select_balanced_accuracy_threshold(
+            val_predictions["true_label"].to_numpy(),
+            val_predictions["pred_proba"].to_numpy(),
+        )
     test_predictions, test_epoch_predictions = _predict_patients(
         model, splits["test"], condition, device,
         batch_size, workers, random_state,
@@ -688,7 +694,9 @@ def train_condition(
         "class_weights": class_weights, "best_epoch": best_epoch,
         "best_validation_patient_auprc": best_score, "threshold": threshold,
         "checkpoint_selection": "validation_patient_auprc",
-        "threshold_selection": "validation_patient_balanced_accuracy",
+        "threshold_selection": (
+            "validation_patient_balanced_accuracy" if fixed_threshold is None else "fixed"
+        ),
         "normalization": "epoch_channel_zscore", "loss": "patient_mean_weighted_bce",
         "patient_aggregation": "mean_epoch_probability_across_recordings",
         "positive_label": "1=control",
