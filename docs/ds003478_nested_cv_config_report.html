@@ -105,7 +105,7 @@ pre{background:#133043;color:#f4f8fa;padding:16px;overflow:auto;border-radius:8p
 <tr><th scope="row">EEGNet</th><td>GradientExplainer，来自内层训练集的最多 32 名受试者，每人 1 窗作为背景。每位外层受试者最多解释 2 窗，每窗 64 次梯度采样。解释概率输出。</td><td><code>shap_test.npz</code>（通道 × 时间归因及名称）、背景和测试窗索引、通道重要度 CSV 及 PNG。</td></tr>
 <tr><th scope="row">XGBoost</th><td>对完整 booster 应用 TreeSHAP，解释外层全部保留窗。归因为 log-odds 尺度。特征顺序按 <code>base211_conn80</code>，拼接组按两组成分分别排列。</td><td><code>outer_shap.npz</code>（归因矩阵）和 <code>outer_shap_epochs.csv</code>（窗索引）。</td></tr>
 </tbody></table></div>
-<p>嵌套汇总脚本只生成分类指标和折外预测。若要做总体成分比较，可从各折 SHAP 先在受试者内对窗及五个模型等权汇总，再在参与者间平均。在拼接组内分别计算 specific 与 coherent 的平均绝对归因及其占比，并在同模型内对照各阈值。两种解释尺度和采样范围不同，归因绝对值应分别报告。分类效能与归因反映 BDI 分组任务，单凭这些结果无法判断成分的生理或伪迹来源。</p>
+<p>嵌套汇总脚本生成分类指标、折外预测和三个跨折 SHAP 表：<code>shap_importance.csv</code>（通道或特征排名）、<code>shap_components.csv</code>（成分总量及占比）、<code>shap_xgboost_bands.csv</code>（成分与频带汇总）。绝对 SHAP 依次在窗内时间轴（EEGNet）、评估窗、同一受试者的五个模型及受试者之间取平均。两种解释尺度和采样范围不同，归因绝对值分别报告。分类效能与归因反映 BDI 分组任务，单凭这些结果无法判断成分的生理或伪迹来源。</p>
 </section>
 <section id="run">
 <h2>CUDA 服务器执行方式</h2>
@@ -146,7 +146,7 @@ BASH</code></pre>
 <tr><th scope="row">XGBoost</th><td><code>inner_N/</code> 保存验证预测和带 SHA-256 的完成标记。已验证内层预测在重启时复用。若某个内层模型已从内存释放且对应外层解释未完成，只重拟合该模型。旧网格搜索结果与默认参数协议不兼容，应使用新的结果目录。</td></tr>
 <tr><th scope="row">EEGNet</th><td><code>last_training.pt</code> 每轮原子写入，含模型、优化器、学习率调度器、随机状态和历史。<code>best_model.pt</code> 供外层预测和 SHAP 使用。两者均为临时文件，在对应外层解释校验完成后删除。内层保留训练历史和验证预测。</td></tr>
 <tr><th scope="row">条件结果</th><td><code>inner_oof_predictions.csv</code>、<code>frozen_selection.json</code>、<code>result.json</code>、<code>result_complete.json</code>。每个 <code>inner_N/outer/</code> 保存 <code>probabilities.npy</code>、SHAP 与校验标记。</td></tr>
-<tr><th scope="row">最终汇总</th><td><code>&lt;method&gt;_&lt;condition&gt;_oof.csv</code> 与 <code>comparison.csv</code>。汇总检查每个结果的完成哈希以及受试者是否齐全、是否重复。</td></tr>
+<tr><th scope="row">最终汇总</th><td><code>&lt;method&gt;_&lt;condition&gt;_oof.csv</code>、<code>comparison.csv</code> 和跨折 SHAP 汇总表。汇总检查每个结果的完成哈希以及受试者是否齐全、是否重复。</td></tr>
 </tbody></table></div>
 <p>中断后用原命令、原缓存和原结果路径重启，无需额外 <code>--resume</code>。已校验的条件和外层解释会跳过。配置或实现不匹配时应使用独立结果目录。EEGNet 中断期间的临时文件会留作续跑；完成后预测、指标与归因仍可复核，重新推理则需要重新拟合。</p>
 </section>
