@@ -1,4 +1,4 @@
-"""Patient-level metrics, paired comparisons and SHAP summaries for TUEP OOF."""
+"""Patient-level metrics, paired comparisons and SHAP summaries for EEG OOF."""
 from __future__ import annotations
 
 from itertools import product
@@ -119,7 +119,7 @@ def grouping(name, condition, method):
     return component, "base211"
 
 
-def summarize(output, windows, patients, stages, methods, folds):
+def summarize(output, windows, patients, stages, methods, folds, *, dataset="tuep"):
     ids = patients["evaluation_id"].to_numpy()
     y = patients["label"].to_numpy()
     fold_ids = patients["outer_fold"].to_numpy()
@@ -215,10 +215,19 @@ def summarize(output, windows, patients, stages, methods, folds):
         "paired_comparisons.csv": paired, "shap_importance.csv": shap, "shap_blocks.csv": blocks,
     }.items():
         continuous._atomic_dataframe(table, target / filename)
+    positive_class = "normal" if dataset == "tuab" else "control"
     lines = [
-        "# TUEP ECMAD shared 10-fold evaluation", "",
-        f"{len(y)} patients, {len(windows)} matched windows. Positive class: control.",
-        "",
+        f"# {dataset.upper()} ECMAD shared 10-fold evaluation", "",
+        f"{len(y)} patients, {len(windows)} matched windows. Positive class: {positive_class}.", "",
+    ]
+    if dataset == "tuab":
+        excluded = pd.read_csv(output / "recordings.csv")["exclusion_reason"].notna().sum()
+        lines += [
+            "Official train and eval recordings were pooled for patient-level cross-validation.",
+            f"Patients with conflicting recording labels were excluded ({excluded} recordings). "
+            "Estimates apply to patients with a consistent recording label.", "",
+        ]
+    lines += [
         "| Model | Phase | Input | OOF AUROC (95% CI) | OOF AP (95% CI) | Balanced accuracy |",
         "|---|---|---|---:|---:|---:|",
     ]
@@ -233,8 +242,8 @@ def summarize(output, windows, patients, stages, methods, folds):
         "DeLong and bootstrap on these predictions do not capture variation from splitting or refitting.",
         "Raw contrasts form one Holm family per endpoint across both models. Fold Wilcoxon and "
         "within-phase contrasts are exploratory.",
-        "SHAP importance gives each patient equal weight. EEGNet explains control probability and "
-        "XGBoost explains control log-odds.", "",
+        f"SHAP importance gives each patient equal weight. EEGNet explains {positive_class} probability "
+        f"and XGBoost explains {positive_class} log-odds.", "",
     ]
     temporary = target / ".report.md.tmp"
     temporary.write_text("\n".join(lines), encoding="utf-8")

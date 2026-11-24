@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Launch or resume the TUEP experiment. Put --detach immediately after RUN_DIR.
+# Launch or resume shared EEG cross-validation. Put --detach immediately after RUN_DIR.
 set -euo pipefail
 
 if [[ $# -eq 0 || "$1" == "-h" || "$1" == "--help" ]]; then
     cat <<'EOF'
 Usage: bash scripts/run_tuep_shared_10fold_cv.sh RUN_DIR [--detach] [pipeline options]
 Common options: --data-dir PATH --cache-dir PATH --device auto|cpu|cuda --workers N
+Use --dataset tuab for TUAB. The dataset defaults to TUEP.
 For a pilot, add --max-model-folds N. Rerun with the same settings to resume.
 The launcher appends to RUN_DIR/run.log. Set TUEP_CONDA_ENV to change eeg_pipeline.
 EOF
@@ -31,6 +32,6 @@ mkdir -p -- "$output/.runtime/numba" "$output/.runtime/matplotlib"
 export NUMBA_CACHE_DIR="${NUMBA_CACHE_DIR:-$output/.runtime/numba}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-$output/.runtime/matplotlib}"
 export MNE_DONTWRITE_HOME="${MNE_DONTWRITE_HOME:-true}"
-printf '\n%s Starting TUEP 10-fold pipeline\n' "$(date '+%Y-%m-%d %H:%M:%S %z')"
+printf '\n%s Starting shared EEG 10-fold pipeline\n' "$(date '+%Y-%m-%d %H:%M:%S %z')"
 exec conda run --no-capture-output -n "${TUEP_CONDA_ENV:-eeg_pipeline}" \
     python -u "$root/scripts/run_tuep_shared_10fold_cv.py" "$@" --output-dir "$output"

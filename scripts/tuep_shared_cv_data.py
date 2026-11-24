@@ -1,4 +1,4 @@
-"""Recording-level preparation for the shared TUEP cross-validation run."""
+"""Recording-level preparation for shared patient-level EEG cross-validation."""
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
@@ -167,7 +167,7 @@ def prepare_epochs(records, cfg, stage, root, windows, workers):
                 "epoch_start_sample": starts, "segment_index": segments,
             }))
     if not frames:
-        raise ValueError("No eligible TUEP epochs")
+        raise ValueError("No eligible EEG epochs")
     current = pd.concat(frames, ignore_index=True)
     if current.duplicated(WINDOW_KEY).any():
         raise ValueError("Duplicate window identity")
@@ -176,14 +176,14 @@ def prepare_epochs(records, cfg, stage, root, windows, workers):
     return current
 
 
-def split_patients(windows, expected_patients):
+def split_patients(windows, expected_patients, *, dataset="tuep"):
     patients = windows[["evaluation_id", "patient_id", "label"]].drop_duplicates()
     patients = patients.sort_values("evaluation_id").reset_index(drop=True)
     if not patients["patient_id"].is_unique:
-        raise ValueError("Patient IDs must be unique across TUEP labels")
+        raise ValueError("Each patient must have one evaluation ID and one class label")
     counts = patients["label"].value_counts().to_dict()
-    if len(patients) != expected_patients or (
-        expected_patients == 178 and counts != {0: 96, 1: 82}
+    if (expected_patients is not None and len(patients) != expected_patients) or (
+        dataset == "tuep" and expected_patients == 178 and counts != {0: 96, 1: 82}
     ):
         raise ValueError(f"Expected {expected_patients} patients; found {len(patients)}: {counts}")
     if set(counts) != {0, 1} or min(counts.values()) < N_FOLDS:

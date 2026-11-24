@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run raw and five ECMAD phases with shared patient-level TUEP 10-fold CV."""
+"""Run raw and five ECMAD phases with shared patient-level TUEP or TUAB 10-fold CV."""
 from __future__ import annotations
 
 import argparse
@@ -196,6 +196,7 @@ def run_eegnet(path, cfg, condition, windows, plan, waveforms, held, bg, fold, d
 
     eegnet = import_module("23_train_tuep_component_eegnet")
     model_cfg = cfg["ml"]["tuep_component_eegnet"]
+    positive_class = "normal" if cfg["dataset"]["active"] == "tuab" else "control"
     torch.set_num_threads(workers)
     patients = eegnet_patients(windows, plan, waveforms, fold, cfg)
     training = path / "training"
@@ -207,6 +208,7 @@ def run_eegnet(path, cfg, condition, windows, plan, waveforms, held, bg, fold, d
         eegnet.train_condition(
             condition, patients, model_cfg, training, int(model_cfg["random_state"]),
             device, int(model_cfg["num_workers"]), fingerprint, fixed_threshold=0.5,
+            positive_class=positive_class,
         )
     checkpoint = torch.load(training / "best_model.pt", map_location="cpu", weights_only=True)
     model = eegnet._make_model(checkpoint["n_channels"], checkpoint["n_times"], model_cfg)
@@ -223,13 +225,14 @@ def run_eegnet(path, cfg, condition, windows, plan, waveforms, held, bg, fold, d
     model_meta = {
         "parameters": model_cfg, "device": device, "model": "training/best_model.pt",
         "best_epoch": read_json(training / "best_params.json")["best_epoch"],
-        "threshold": 0.5, "shap_method": "DeepSHAP", "shap_output": "control_probability",
+        "threshold": 0.5, "shap_method": "DeepSHAP", "shap_output": f"{positive_class}_probability",
         "shap_reduction": "mean_abs_over_time",
     }
     return probabilities, shap_output, model_meta
 
 
-def run_xgboost(path, matrix, windows, held, bg, condition, device, workers):
+def run_xgboost(path, matrix, windows, held, bg, condition, device, workers,
+                *, positive_class="control"):
     import joblib
     import shap
     train = ~windows["evaluation_id"].isin(held["evaluation_id"])
@@ -264,7 +267,7 @@ def run_xgboost(path, matrix, windows, held, bg, condition, device, workers):
         "parameters": {k: v for k, v in model.get_params().items() if k != "missing"},
         "training_device": device, "rounds": model.get_booster().num_boosted_rounds(),
         "model": "xgboost.ubj", "scaler": "scaler.joblib", "threshold": 0.5,
-        "shap_method": "TreeSHAP/interventional", "shap_output": "control_log_odds",
+        "shap_method": "TreeSHAP/interventional", "shap_output": f"{positive_class}_log_odds",
     }
     return probabilities, (np.concatenate(chunks), names, baseline, max_error), model_meta
 
@@ -312,7 +315,9 @@ def run_fold(path, cfg, method, condition, windows, plan, waveforms, matrix,
         result = run_eegnet(path, cfg, condition, windows, plan, waveforms, held, bg,
                             fold, device, workers, fingerprint)
     else:
-        result = run_xgboost(path, matrix, windows, held, bg, condition, device, workers)
+        positive_class = "normal" if cfg["dataset"]["active"] == "tuab" else "control"
+        result = run_xgboost(path, matrix, windows, held, bg, condition, device, workers,
+                             positive_class=positive_class)
     probability, (values, names, baseline, error), metadata = result
     epochs = epoch_metrics_rows(held, probability)
     eegnet = import_module("23_train_tuep_component_eegnet")
@@ -358,11 +363,25 @@ def resolve_device(device):
     return device
 
 
+def previous_tuep_sources(sources):
+    # Permit continuation across the TUAB adapter change only for the reviewed
+    # source versions. The remaining source hashes and all run inputs still match.
+    approved = read_json(ROOT / "scripts" / "tuep_shared_cv_resume_compat.json")
+    if all(sources.get(path) == pair["current"] for path, pair in approved.items()):
+        return {**sources, **{path: pair["previous"] for path, pair in approved.items()}}
+    return sources
+
+
 def load_run(args, output, cache, device):
     configs = {
         name: load_config(ROOT / "configs" / config)
         for name, config in {"raw": PHASES["0.01"], **PHASES}.items()
     }
+    if args.dataset == "tuab":
+        # Keep the same phase and model settings as TUEP; only select the TUAB adapter.
+        tuab = load_config(ROOT / "configs" / "tuab.yaml")["dataset"]
+        for cfg in configs.values():
+            cfg["dataset"] = tuab
     raw = configs["raw"]
     for stage, cfg in configs.items():
         cfg["paths"].update(
@@ -371,30 +390,39 @@ def load_run(args, output, cache, device):
             results_dir=str(output / stage),
         )
         if any(cfg[key] != raw[key] for key in ("dataset", "preprocessing")):
-            raise ValueError(f"Shared TUEP preparation differs for {stage}")
+            raise ValueError(f"Shared {args.dataset.upper()} preparation differs for {stage}")
         if cfg["channels"]["standard_19"] != raw["channels"]["standard_19"]:
             raise ValueError(f"Channel order differs for {stage}")
     index = build_recording_index(raw)
     if index.empty:
-        raise ValueError(f"No TUEP EDFs discovered in {args.data_dir}")
-    discovered = index["patient_id"].nunique()
-    if discovered < args.expected_patients:
-        raise ValueError(f"Found only {discovered} patients before epoch rejection, "
-                         f"expected {args.expected_patients}; check --data-dir")
+        raise ValueError(f"No {args.dataset.upper()} EDFs discovered in {args.data_dir}")
     index = index.sort_values("edf_path").reset_index(drop=True)
     index["record_cache_id"] = index["edf_path"].map(
         lambda path: hashlib.sha256(str(Path(path).relative_to(args.data_dir)).encode()).hexdigest()[:24]
     )
     if not index["record_cache_id"].is_unique:
         raise ValueError("Duplicate recording cache identity")
-    records = index.to_dict("records")
+    eligible = index
+    audit = index
+    if args.dataset == "tuab":
+        mixed = index.groupby("patient_id")["label"].transform("nunique") > 1
+        index["evaluation_id"] = index["label"].map("{:02d}_".format) + index["patient_id"]
+        audit = index.assign(exclusion_reason=np.where(mixed, "mixed_recording_labels", ""))
+        eligible = index.loc[~mixed]
+        print(f"TUAB excluded {index.loc[mixed, 'patient_id'].nunique()} patients with "
+              f"conflicting recording labels ({int(mixed.sum())} recordings)", flush=True)
+    discovered = eligible["patient_id"].nunique()
+    if args.expected_patients is not None and discovered < args.expected_patients:
+        raise ValueError(f"Found only {discovered} patients before epoch rejection, "
+                         f"expected {args.expected_patients}; check --data-dir")
+    records = eligible.to_dict("records")
     run_meta = {
         "cache": str(cache), "device": device, "workers": args.workers,
         "expected_patients": args.expected_patients, "profile": PROFILE.hash,
         "folds": N_FOLDS, "seed": SEED, "configs": configs,
         "versions": {package: version(package) for package in
                      ("numpy", "pandas", "scipy", "scikit-learn", "xgboost", "torch", "shap", "mne")},
-        "inputs": digest(dataset_identity(records)),
+        "inputs": digest(dataset_identity(index.to_dict("records"))),
     }
     source_files = [
         Path(__file__), ROOT / "scripts/tuep_shared_cv_data.py",
@@ -403,14 +431,20 @@ def load_run(args, output, cache, device):
         ROOT / "scripts/22_extract_tuep_component_epochs.py",
         *sorted((ROOT / "eeg_bg").rglob("*.py")),
     ]
-    run_meta["code"] = digest({str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
-                               for path in source_files})
+    sources = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+               for path in source_files}
+    run_meta["code"] = digest(sources)
     fingerprint = digest(run_meta)
     manifest = output / "run.json"
     if manifest.is_file() and read_json(manifest)["fingerprint"] != fingerprint:
-        raise ValueError("Run inputs, code or settings changed. Use the original settings or a new output directory.")
+        existing = read_json(manifest)["fingerprint"]
+        previous = previous_tuep_sources(sources) if args.dataset == "tuep" else sources
+        legacy_meta = {**run_meta, "code": digest(previous)}
+        if existing != digest(legacy_meta):
+            raise ValueError("Run inputs, code or settings changed. Use the original settings or a new output directory.")
+        run_meta, fingerprint = legacy_meta, existing
     continuous._atomic_json({**run_meta, "fingerprint": fingerprint}, manifest)
-    audit = index.assign(annotation_available=index["edf_path"].map(
+    audit = audit.assign(annotation_available=audit["edf_path"].map(
         lambda path: Path(path).with_suffix(".csv_bi").is_file()
     ))
     continuous._atomic_dataframe(audit, output / "recordings.csv")
@@ -437,7 +471,9 @@ def run(args, output, cache, status):
     windows_path = output / "windows.csv"
     folds_path = output / "patient_folds.csv"
     windows = read_csv(windows_path) if windows_path.is_file() else None
-    plan = None if windows is None else split_patients(windows, args.expected_patients)
+    plan = None if windows is None else split_patients(
+        windows, args.expected_patients, dataset=args.dataset,
+    )
     if folds_path.is_file():
         pd.testing.assert_frame_equal(read_csv(folds_path), plan, check_dtype=False)
     total_done = 0
@@ -477,7 +513,7 @@ def run(args, output, cache, status):
         current = prepare_epochs(records, cfg, stage, waveforms, windows, args.workers)
         if windows is None:
             windows = current
-            plan = split_patients(windows, args.expected_patients)
+            plan = split_patients(windows, args.expected_patients, dataset=args.dataset)
             continuous._atomic_dataframe(windows, windows_path)
         continuous._atomic_dataframe(plan, folds_path)
         progress(output, status, step="features")
@@ -518,7 +554,7 @@ def run(args, output, cache, status):
         clear_phase_cache(stage_cache)
 
     progress(output, status, step="summary", phase=None, method=None, condition=None, fold=None)
-    summarize(output, windows, plan, STAGES, METHODS, N_FOLDS)
+    summarize(output, windows, plan, STAGES, METHODS, N_FOLDS, dataset=args.dataset)
     owner.unlink()
     cache.rmdir()
     progress(output, status, state="completed", step="done")
@@ -528,35 +564,40 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path,
                         help="run directory; reuse it to resume an identical run")
+    parser.add_argument("--dataset", choices=("tuep", "tuab"), default="tuep")
     parser.add_argument("--data-dir", type=Path,
-                        help="TUEP v3.1.0 root (default: paths.data_root in configs/default.yaml)")
+                        help="dataset root (default: configs/default.yaml or configs/tuab.yaml)")
     parser.add_argument("--cache-dir", type=Path,
                         help="temporary cache parent (default: paths.cache_dir in configs/default.yaml)")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--expected-patients", type=int, default=178,
-                        help="expected eligible patient count; 178 also checks the historical class counts")
+    parser.add_argument("--expected-patients", type=int,
+                        help="optional eligible patient count audit (TUEP defaults to 178)")
     parser.add_argument("--max-model-folds", type=int,
                         help="pause after this many newly finished model folds (pilot and resume)")
     args = parser.parse_args()
-    if args.workers < 1 or args.expected_patients < 2 * N_FOLDS or (
+    if args.dataset == "tuep" and args.expected_patients is None:
+        args.expected_patients = 178
+    if args.workers < 1 or (args.expected_patients is not None and args.expected_patients < 2 * N_FOLDS) or (
         args.max_model_folds is not None and args.max_model_folds < 1
     ):
         parser.error("Require positive workers/pilot limit and at least 20 expected patients")
     defaults = load_config(ROOT / "configs" / "default.yaml")["paths"]
-    args.data_dir = (args.data_dir or Path(defaults["data_root"])).expanduser().resolve()
+    data_root = (load_config(ROOT / "configs" / "tuab.yaml")["paths"]["data_root"]
+                 if args.dataset == "tuab" else defaults["data_root"])
+    args.data_dir = (args.data_dir or Path(data_root)).expanduser().resolve()
     output = args.output_dir.expanduser().resolve()
     requested_cache = (args.cache_dir or Path(defaults["cache_dir"])).expanduser()
     try:
         cache_parent = requested_cache.resolve()
-        cache = cache_parent / f"tuep-10fold-{digest(str(output))[:24]}"
+        cache = cache_parent / f"{args.dataset}-10fold-{digest(str(output))[:24]}"
         cache_is_symlink = cache.is_symlink()
     except PermissionError:
         parser.error(f"Cannot access cache parent {requested_cache}. Set --cache-dir to a writable directory.")
     if not args.data_dir.is_dir():
-        parser.error(f"TUEP data directory does not exist: {args.data_dir}")
+        parser.error(f"{args.dataset.upper()} data directory does not exist: {args.data_dir}")
     if output.is_relative_to(cache) or args.data_dir.is_relative_to(cache) or cache_is_symlink:
-        parser.error("The run and the TUEP dataset must be outside the temporary cache subtree")
+        parser.error("The run and the dataset must be outside the temporary cache subtree")
     output.mkdir(parents=True, exist_ok=True)
     with (output / "run.lock").open("a") as lock:
         try:
@@ -568,7 +609,8 @@ def main():
             raise KeyboardInterrupt(f"Signal {signum}")
 
         signal.signal(signal.SIGTERM, terminate)
-        status = {"pid": os.getpid(), "cache_dir": str(cache), "completed_folds": 0,
+        status = {"pid": os.getpid(), "dataset": args.dataset, "cache_dir": str(cache),
+                  "completed_folds": 0,
                   "total_folds": len(METHODS) * N_FOLDS * sum(map(len, STAGES.values()))}
         try:
             progress(output, status, state="running", step="initialize")

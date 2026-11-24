@@ -582,7 +582,7 @@ def train_condition(
     condition: str, patients: list[dict[str, Any]], model_cfg: dict,
     condition_dir: Path, random_state: int, resolved_device: str,
     workers: int, fingerprint: str,
-    *, fixed_threshold: float | None = None,
+    *, fixed_threshold: float | None = None, positive_class: str = "control",
 ) -> dict[str, Any]:
     splits = {
         split: [patient for patient in patients if patient["split"] == split]
@@ -673,7 +673,7 @@ def train_condition(
     _atomic_torch_save({
         "state_dict": best_state, "condition": condition,
         "fingerprint": fingerprint, "n_channels": n_channels,
-        "n_times": n_times, "positive_label": "1=control",
+        "n_times": n_times, "positive_label": f"1={positive_class}",
     }, condition_dir / "best_model.pt")
     _atomic_csv(pd.DataFrame(history), condition_dir / "history.csv")
     _atomic_json(val_metrics, condition_dir / "val_metrics.json")
@@ -699,7 +699,7 @@ def train_condition(
         ),
         "normalization": "epoch_channel_zscore", "loss": "patient_mean_weighted_bce",
         "patient_aggregation": "mean_epoch_probability_across_recordings",
-        "positive_label": "1=control",
+        "positive_label": f"1={positive_class}",
     }
     _atomic_json(best_params, condition_dir / "best_params.json")
     _write_cache_marker(condition_dir, fingerprint)
