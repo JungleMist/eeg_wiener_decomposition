@@ -320,10 +320,9 @@ def run_fold(path, cfg, method, condition, windows, plan, waveforms, matrix,
                              positive_class=positive_class)
     probability, (values, names, baseline, error), metadata = result
     epochs = epoch_metrics_rows(held, probability)
-    eegnet = import_module("23_train_tuep_component_eegnet")
-    eegnet._atomic_csv(epochs, path / "test_epoch_predictions.csv")
-    eegnet._atomic_csv(patient_predictions(epochs), path / "test_predictions.csv")
-    eegnet._atomic_csv(bg, path / "shap_background.csv")
+    continuous._atomic_dataframe(epochs, path / "test_epoch_predictions.csv")
+    continuous._atomic_dataframe(patient_predictions(epochs), path / "test_predictions.csv")
+    continuous._atomic_dataframe(bg, path / "shap_background.csv")
     continuous._atomic_npz(path / "shap.npz", values=values, names=np.asarray(names),
                            baseline=baseline, max_additivity_error=error)
     continuous._atomic_json(metadata, path / "model.json")
@@ -346,8 +345,8 @@ def progress(output, status, **update):
     print(f"{status['updated_at']} {details}", flush=True)
 
 
-def model_folds(stage):
-    for method in METHODS:
+def model_folds(stage, methods):
+    for method in methods:
         for condition in STAGES[stage]:
             for fold in range(1, N_FOLDS + 1):
                 yield method, condition, fold
@@ -363,13 +362,13 @@ def resolve_device(device):
     return device
 
 
-def previous_tuep_sources(sources):
-    # Permit continuation across the TUAB adapter change only for the reviewed
-    # source versions. The remaining source hashes and all run inputs still match.
+def previous_sources(sources, dataset):
+    # Preserve compatible runs only across the reviewed source changes.
     approved = read_json(ROOT / "scripts" / "tuep_shared_cv_resume_compat.json")
-    if all(sources.get(path) == pair["current"] for path, pair in approved.items()):
-        return {**sources, **{path: pair["previous"] for path, pair in approved.items()}}
-    return sources
+    if all(sources.get(path) == value for path, value in approved["current"].items()):
+        for revision in approved["previous"]:
+            if dataset in revision["datasets"]:
+                yield {**sources, **revision["sources"]}
 
 
 def load_run(args, output, cache, device):
@@ -424,6 +423,8 @@ def load_run(args, output, cache, device):
                      ("numpy", "pandas", "scipy", "scikit-learn", "xgboost", "torch", "shap", "mne")},
         "inputs": digest(dataset_identity(index.to_dict("records"))),
     }
+    if args.methods != METHODS:
+        run_meta["methods"] = list(args.methods)
     source_files = [
         Path(__file__), ROOT / "scripts/tuep_shared_cv_data.py",
         ROOT / "scripts/23_train_tuep_component_eegnet.py",
@@ -438,11 +439,13 @@ def load_run(args, output, cache, device):
     manifest = output / "run.json"
     if manifest.is_file() and read_json(manifest)["fingerprint"] != fingerprint:
         existing = read_json(manifest)["fingerprint"]
-        previous = previous_tuep_sources(sources) if args.dataset == "tuep" else sources
-        legacy_meta = {**run_meta, "code": digest(previous)}
-        if existing != digest(legacy_meta):
+        for previous in previous_sources(sources, args.dataset):
+            legacy_meta = {**run_meta, "code": digest(previous)}
+            if existing == digest(legacy_meta):
+                run_meta, fingerprint = legacy_meta, existing
+                break
+        else:
             raise ValueError("Run inputs, code or settings changed. Use the original settings or a new output directory.")
-        run_meta, fingerprint = legacy_meta, existing
     continuous._atomic_json({**run_meta, "fingerprint": fingerprint}, manifest)
     audit = audit.assign(annotation_available=audit["edf_path"].map(
         lambda path: Path(path).with_suffix(".csv_bi").is_file()
@@ -484,7 +487,7 @@ def run(args, output, cache, status):
         stage_cache = cache / stage
         if stage_cache.is_symlink():
             raise ValueError(f"Phase cache path may not be a symlink: {stage_cache}")
-        expected = list(model_folds(stage))
+        expected = list(model_folds(stage, args.methods))
         already_done = {
             (method, condition, fold)
             for method, condition, fold in expected
@@ -521,7 +524,7 @@ def run(args, output, cache, status):
         banks = ("raw",) if stage == "raw" else COMPONENTS
         jobs = [(key, cfg, banks, waveforms, features) for key in windows["record_cache_id"].unique()]
         run_record_jobs(extract_features, jobs, args.workers, "Feature generation")
-        for method in METHODS:
+        for method in args.methods:
             for condition in conditions:
                 pending = [fold for fold in range(1, N_FOLDS + 1)
                            if (method, condition, fold) not in already_done]
@@ -554,7 +557,7 @@ def run(args, output, cache, status):
         clear_phase_cache(stage_cache)
 
     progress(output, status, step="summary", phase=None, method=None, condition=None, fold=None)
-    summarize(output, windows, plan, STAGES, METHODS, N_FOLDS, dataset=args.dataset)
+    summarize(output, windows, plan, STAGES, args.methods, N_FOLDS, dataset=args.dataset)
     owner.unlink()
     cache.rmdir()
     progress(output, status, state="completed", step="done")
@@ -565,6 +568,8 @@ def main():
     parser.add_argument("--output-dir", required=True, type=Path,
                         help="run directory; reuse it to resume an identical run")
     parser.add_argument("--dataset", choices=("tuep", "tuab"), default="tuep")
+    parser.add_argument("--models", choices=("all", "xgboost"), default="all",
+                        help="run both EEGNet and XGBoost (default), or XGBoost only")
     parser.add_argument("--data-dir", type=Path,
                         help="dataset root (default: configs/default.yaml or configs/tuab.yaml)")
     parser.add_argument("--cache-dir", type=Path,
@@ -576,6 +581,7 @@ def main():
     parser.add_argument("--max-model-folds", type=int,
                         help="pause after this many newly finished model folds (pilot and resume)")
     args = parser.parse_args()
+    args.methods = METHODS if args.models == "all" else ("xgboost",)
     if args.dataset == "tuep" and args.expected_patients is None:
         args.expected_patients = 178
     if args.workers < 1 or (args.expected_patients is not None and args.expected_patients < 2 * N_FOLDS) or (
@@ -609,9 +615,10 @@ def main():
             raise KeyboardInterrupt(f"Signal {signum}")
 
         signal.signal(signal.SIGTERM, terminate)
-        status = {"pid": os.getpid(), "dataset": args.dataset, "cache_dir": str(cache),
+        status = {"pid": os.getpid(), "dataset": args.dataset, "methods": list(args.methods),
+                  "cache_dir": str(cache),
                   "completed_folds": 0,
-                  "total_folds": len(METHODS) * N_FOLDS * sum(map(len, STAGES.values()))}
+                  "total_folds": len(args.methods) * N_FOLDS * sum(map(len, STAGES.values()))}
         try:
             progress(output, status, state="running", step="initialize")
             run(args, output, cache, status)

@@ -1,14 +1,30 @@
 {
-  "scripts/run_tuep_shared_10fold_cv.py": {
-    "previous": "aa22888b9d71c19248031a5351a8446602e64d362f42686554b6d5b18282309e",
-    "current": "f381f44b2655c758041e3ee74dc3f00a7ae6e279f0570406537b76eb461270bb"
+  "current": {
+    "scripts/run_tuep_shared_10fold_cv.py": "080feb9994fe031524fe957b73b79c73b5dc97e3f36dba50862596048802ae84",
+    "scripts/tuep_shared_cv_data.py": "ac67fda94bba3a05cc3afd481ecbc9ff4638aeb5ab882165908f742f143955ca",
+    "scripts/23_train_tuep_component_eegnet.py": "6af62e86b9d73eb904d71cf3d605c6e98d97aeb5b9196cd62668ccd4765e9eff"
   },
-  "scripts/tuep_shared_cv_data.py": {
-    "previous": "b59f005fe6b1ed8e9e65d1565eee6fd7526cb631da108aa039c3008c2584b5c5",
-    "current": "ac67fda94bba3a05cc3afd481ecbc9ff4638aeb5ab882165908f742f143955ca"
-  },
-  "scripts/23_train_tuep_component_eegnet.py": {
-    "previous": "caa3cf18396f820182edec1d7f833cac83472d8ff91b0d8f08993444f340eb4e",
-    "current": "6af62e86b9d73eb904d71cf3d605c6e98d97aeb5b9196cd62668ccd4765e9eff"
-  }
+  "previous": [
+    {
+      "datasets": [
+        "tuep",
+        "tuab"
+      ],
+      "sources": {
+        "scripts/run_tuep_shared_10fold_cv.py": "f381f44b2655c758041e3ee74dc3f00a7ae6e279f0570406537b76eb461270bb",
+        "scripts/tuep_shared_cv_data.py": "ac67fda94bba3a05cc3afd481ecbc9ff4638aeb5ab882165908f742f143955ca",
+        "scripts/23_train_tuep_component_eegnet.py": "6af62e86b9d73eb904d71cf3d605c6e98d97aeb5b9196cd62668ccd4765e9eff"
+      }
+    },
+    {
+      "datasets": [
+        "tuep"
+      ],
+      "sources": {
+        "scripts/run_tuep_shared_10fold_cv.py": "aa22888b9d71c19248031a5351a8446602e64d362f42686554b6d5b18282309e",
+        "scripts/tuep_shared_cv_data.py": "b59f005fe6b1ed8e9e65d1565eee6fd7526cb631da108aa039c3008c2584b5c5",
+        "scripts/23_train_tuep_component_eegnet.py": "caa3cf18396f820182edec1d7f833cac83472d8ff91b0d8f08993444f340eb4e"
+      }
+    }
+  ]
 }

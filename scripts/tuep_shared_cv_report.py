@@ -240,11 +240,15 @@ def summarize(output, windows, patients, stages, methods, folds, *, dataset="tue
         "", f"AP baseline: {y.mean():.3f}. These metrics describe downstream classification.",
         "Intervals use 10,000 stratified paired patient resamples of the fixed OOF predictions.",
         "DeLong and bootstrap on these predictions do not capture variation from splitting or refitting.",
-        "Raw contrasts form one Holm family per endpoint across both models. Fold Wilcoxon and "
-        "within-phase contrasts are exploratory.",
-        f"SHAP importance gives each patient equal weight. EEGNet explains {positive_class} probability "
-        f"and XGBoost explains {positive_class} log-odds.", "",
+        "Raw contrasts form one Holm family per endpoint across the included models. "
+        "Fold Wilcoxon and within-phase contrasts are exploratory.",
+        "SHAP importance gives each patient equal weight.",
     ]
+    if "eegnet" in methods:
+        lines.append(f"EEGNet explains {positive_class} probability.")
+    if "xgboost" in methods:
+        lines.append(f"XGBoost explains {positive_class} log-odds.")
+    lines.append("")
     temporary = target / ".report.md.tmp"
     temporary.write_text("\n".join(lines), encoding="utf-8")
     temporary.replace(target / "report.md")
