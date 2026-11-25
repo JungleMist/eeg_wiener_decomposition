@@ -20,6 +20,8 @@ Efficiency:
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 from scipy.signal import hilbert, butter, sosfiltfilt
 from scipy.signal.windows import hann
@@ -30,22 +32,16 @@ from eeg_bg.features.band_power import BANDS
 
 ALL_PAIRS: list[tuple[str, str]] = list(SYMMETRIC_PAIRS)  # 8 homotopic pairs
 
-CONNECTIVITY_NAMES: list[str] = [
-    f"{metric}_{ch1}_{ch2}_{band}"
-    for ch1, ch2 in ALL_PAIRS
-    for band in BANDS
-    for metric in ("coh", "plv")
-]  # 8 × 5 × 2 = 80
+def build_connectivity_names(pairs: Sequence[tuple[str, str]]) -> list[str]:
+    return [
+        f"{metric}_{left}_{right}_{band}"
+        for left, right in pairs
+        for band in BANDS
+        for metric in ("coh", "plv")
+    ]
 
-# Precompute pair index arrays once at import time for vectorised indexing.
-_PAIR_I1: list[int] = []
-_PAIR_I2: list[int] = []
-_CH_TO_STD_IDX: dict[str, int] = {ch: i for i, ch in enumerate(_STANDARD_19)}
-for _ch1, _ch2 in ALL_PAIRS:
-    _PAIR_I1.append(_CH_TO_STD_IDX[_ch1])
-    _PAIR_I2.append(_CH_TO_STD_IDX[_ch2])
-_PAIR_I1 = np.asarray(_PAIR_I1)  # (171,)
-_PAIR_I2 = np.asarray(_PAIR_I2)  # (171,)
+
+CONNECTIVITY_NAMES = build_connectivity_names(ALL_PAIRS)
 
 
 def _bandpass_sos(f_lo: float, f_hi: float, sfreq: float) -> np.ndarray:
@@ -78,14 +74,29 @@ def connectivity_features(
         Layout: for each pair in ``ALL_PAIRS``, for each band in ``BANDS``,
         ``[coherence, PLV]``.  Absent-channel pairs → 10 zeros.
     """
+    return connectivity_features_for_layout(epoch, ch_names, sfreq, _STANDARD_19, ALL_PAIRS, nperseg)
+
+
+def connectivity_features_for_layout(
+    epoch: np.ndarray,
+    ch_names: Sequence[str],
+    sfreq: float,
+    channel_order: Sequence[str],
+    pairs: Sequence[tuple[str, str]],
+    nperseg: int = 250,
+) -> np.ndarray:
+    """Compute the same connectivity blocks for an explicit channel layout."""
+    layout = {name: i for i, name in enumerate(channel_order)}
+    left_indices = np.array([layout[left] for left, _ in pairs], dtype=int)
+    right_indices = np.array([layout[right] for _, right in pairs], dtype=int)
     ch_map = {name: i for i, name in enumerate(ch_names)}
-    n_std = len(_STANDARD_19)
+    n_std = len(channel_order)
     n_times = epoch.shape[1]
 
     # ── Build (n_std, n_times) array; zero-fill absent channels ──────────────
     epoch_std = np.zeros((n_std, n_times), dtype=np.float64)
     present = np.zeros(n_std, dtype=bool)
-    for si, ch in enumerate(_STANDARD_19):
+    for si, ch in enumerate(channel_order):
         if ch in ch_map:
             epoch_std[si] = epoch[ch_map[ch]].astype(np.float64)
             present[si] = True
@@ -107,11 +118,10 @@ def connectivity_features(
     # Auto-power per channel averaged over segments: (n_std, n_freq)
     Pxx = (F * F.conj()).real.mean(axis=1)
 
-    # All pairwise cross-power: (171, n_freq)
-    Cxy = (F[_PAIR_I1] * F[_PAIR_I2].conj()).mean(axis=1)
-    P1  = Pxx[_PAIR_I1]   # (171, n_freq)
-    P2  = Pxx[_PAIR_I2]   # (171, n_freq)
-    coh_all = (np.abs(Cxy) ** 2) / (P1 * P2 + 1e-30)  # (171, n_freq)
+    Cxy = (F[left_indices] * F[right_indices].conj()).mean(axis=1)
+    P1 = Pxx[left_indices]
+    P2 = Pxx[right_indices]
+    coh_all = (np.abs(Cxy) ** 2) / (P1 * P2 + 1e-30)
 
     # ── Per-band Hilbert phases for PLV ───────────────────────────────────────
     phases: dict[str, np.ndarray] = {}  # band_name → (n_std, n_times)
@@ -121,10 +131,9 @@ def connectivity_features(
         phases[band_name] = np.angle(hilbert(filtered, axis=1))  # (n_std, n_times)
 
     # ── Pair absent mask ──────────────────────────────────────────────────────
-    pair_present = present[_PAIR_I1] & present[_PAIR_I2]  # (171,)
+    pair_present = present[left_indices] & present[right_indices]
 
     # ── Compute per-band coh and plv arrays ──────────────────────────────────
-    # coh_bands[band] → (171,), plv_bands[band] → (171,)
     band_names = list(BANDS.keys())
     coh_bands: dict[str, np.ndarray] = {}
     plv_bands: dict[str, np.ndarray] = {}
@@ -132,17 +141,17 @@ def connectivity_features(
     for band_name, (f_lo, f_hi) in BANDS.items():
         band_mask = (freqs >= f_lo) & (freqs <= f_hi)
         coh_b = coh_all[:, band_mask].mean(axis=1) if band_mask.any() \
-                else np.zeros(len(ALL_PAIRS))
-        ph1 = phases[band_name][_PAIR_I1]  # (171, n_times)
-        ph2 = phases[band_name][_PAIR_I2]  # (171, n_times)
+                else np.zeros(len(pairs))
+        ph1 = phases[band_name][left_indices]
+        ph2 = phases[band_name][right_indices]
         plv_b = np.abs(np.mean(np.exp(1j * (ph1 - ph2)), axis=1))
         coh_bands[band_name] = np.where(pair_present, coh_b, 0.0)
         plv_bands[band_name] = np.where(pair_present, plv_b, 0.0)
 
     # ── Assemble in CONNECTIVITY_NAMES order: pair → band → [coh, plv] ───────
-    feats = np.empty(len(ALL_PAIRS) * len(BANDS) * 2, dtype=np.float64)
+    feats = np.empty(len(pairs) * len(BANDS) * 2, dtype=np.float64)
     out_idx = 0
-    for pi in range(len(ALL_PAIRS)):
+    for pi in range(len(pairs)):
         for band_name in band_names:
             feats[out_idx]     = coh_bands[band_name][pi]
             feats[out_idx + 1] = plv_bands[band_name][pi]

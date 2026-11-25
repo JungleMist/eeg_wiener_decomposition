@@ -387,7 +387,10 @@ def eegnet_shap(model, train_x, train_rows, test_x, test_rows, path, keys, cfg):
     candidates = sample_each_subject(train_rows, rng, 1)
     bg = rng.choice(candidates, min(len(candidates), settings["eegnet_shap_background_subjects"]),
                     replace=False)
-    explained = sample_each_subject(test_rows, rng, 2)
+    limit = settings.get("eegnet_shap_max_epochs_per_subject", 2)
+    explained = np.arange(len(test_rows)) if limit is None else sample_each_subject(
+        test_rows, rng, limit,
+    )
     model.eval()
     device = next(model.parameters()).device
     explainer = shap.GradientExplainer(
@@ -399,7 +402,7 @@ def eegnet_shap(model, train_x, train_rows, test_x, test_rows, path, keys, cfg):
         batch = explainer.shap_values(test_x[selection].unsqueeze(1).to(device),
                                       nsamples=settings["eegnet_shap_samples"],
                                       rseed=settings["random_state"] + start)
-        values.append(np.asarray(batch)[:, 0, :, :, 0])
+        values.append(np.asarray(batch, dtype=settings.get("eegnet_shap_storage_dtype"))[:, 0, :, :, 0])
     values = np.concatenate(values)
     if values.shape != tuple(test_x[explained].shape) or not np.isfinite(values).all():
         raise ValueError("Invalid EEGNet SHAP output")
@@ -426,7 +429,8 @@ def eegnet_shap(model, train_x, train_rows, test_x, test_rows, path, keys, cfg):
     plt.close(fig)
 
 
-def fit_eegnet(output, path, records, keys, cfg, device, workers, *, compute_shap=True):
+def fit_eegnet(output, path, records, keys, cfg, device, workers, *, compute_shap=True,
+               positive_class="1=depressing (BDI ≥ 20)"):
     import torch
     from torch import nn
     from torch.utils.data import DataLoader
@@ -526,7 +530,7 @@ def fit_eegnet(output, path, records, keys, cfg, device, workers, *, compute_sha
     model.load_state_dict(best_state)
     write_torch(path / "best_model.pt", {
         "architecture": architecture, "state_dict": best_state,
-        "positive_class": "1=depressing (BDI ≥ 20)",
+        "positive_class": positive_class,
     })
     pd.DataFrame(history).to_csv(path / "history.csv", index=False)
     validation = predict(val_x, val_rows)
