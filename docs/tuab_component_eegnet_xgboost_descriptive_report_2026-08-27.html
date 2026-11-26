@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>TUAB ECMAD 分量分类实验：EEGNet 与 XGBoost 描述性分析</title>
+  <style>
+    :root {
+      --canvas: #eaf0f4;
+      --paper: #ffffff;
+      --ink: #142c43;
+      --text: #283b4d;
+      --muted: #5a6a78;
+      --line: #d2dde5;
+      --soft: #f5f8fa;
+      --raw: #53657a;
+      --specific: #008c82;
+      --coherent: #d97a2b;
+      --abnormal: #d66b5d;
+      --normal: #2c7fb8;
+      --warning-bg: #fff4e8;
+      --warning-line: #e5b376;
+      --ok-bg: #e9f6f3;
+      --shadow: 0 14px 40px rgba(25, 48, 69, 0.10);
+      --radius: 16px;
+      --content: 1180px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.72;
+    }
+    a { color: #0b6e78; text-underline-offset: 3px; }
+    a:focus-visible, summary:focus-visible {
+      outline: 3px solid #f0a34a;
+      outline-offset: 3px;
+      border-radius: 4px;
+    }
+    code, .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.91em;
+    }
+    code {
+      padding: 0.13em 0.38em;
+      border: 1px solid #dce4ea;
+      border-radius: 5px;
+      background: #f3f6f8;
+      overflow-wrap: anywhere;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 238px minmax(0, 1fr);
+      width: min(calc(100% - 32px), 1440px);
+      margin: 16px auto 56px;
+      gap: 22px;
+      align-items: start;
+    }
+    .rail {
+      position: sticky;
+      top: 16px;
+      padding: 24px 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.94);
+      box-shadow: var(--shadow);
+    }
+    .rail-kicker {
+      margin: 0 0 5px;
+      color: var(--specific);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .rail-title {
+      margin: 0 0 20px;
+      color: var(--ink);
+      font-size: 1.03rem;
+      line-height: 1.35;
+    }
+    .rail nav a {
+      display: block;
+      padding: 8px 10px;
+      border-left: 2px solid transparent;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 650;
+      text-decoration: none;
+    }
+    .rail nav a:hover {
+      border-color: var(--specific);
+      background: #eef7f6;
+      color: var(--ink);
+    }
+    .rail-meta {
+      margin: 22px 0 0;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.77rem;
+      line-height: 1.55;
+    }
+
+    main { min-width: 0; }
+    .hero, section, footer {
+      width: min(100%, var(--content));
+      margin-inline: auto;
+    }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(30px, 5vw, 62px);
+      border-radius: calc(var(--radius) + 4px);
+      color: #f6fbff;
+      background:
+        linear-gradient(115deg, rgba(8, 38, 61, 0.98), rgba(18, 62, 83, 0.94)),
+        repeating-linear-gradient(90deg, transparent 0 43px, rgba(255,255,255,.04) 44px 45px);
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -70px;
+      bottom: -130px;
+      width: 360px;
+      height: 360px;
+      border: 1px solid rgba(97, 218, 208, 0.25);
+      border-radius: 50%;
+      box-shadow: 0 0 0 48px rgba(97, 218, 208, 0.035), 0 0 0 96px rgba(97, 218, 208, 0.025);
+    }
+    .eyebrow {
+      margin: 0 0 12px;
+      color: #6ce2d6;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 860px;
+      margin: 0;
+      color: #fff;
+      font-size: clamp(2rem, 4.7vw, 4.35rem);
+      line-height: 1.05;
+      letter-spacing: -0.035em;
+    }
+    .deck {
+      max-width: 780px;
+      margin: 22px 0 0;
+      color: #d6e4ed;
+      font-size: clamp(1rem, 1.7vw, 1.22rem);
+    }
+    .hero-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 25px;
+    }
+    .hero-tags span {
+      padding: 6px 10px;
+      border: 1px solid rgba(255,255,255,.19);
+      border-radius: 999px;
+      color: #e6f0f5;
+      background: rgba(255,255,255,.07);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .phase-track {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(58px, 1fr));
+      max-width: 760px;
+      margin-top: 38px;
+    }
+    .phase-track::before {
+      content: "";
+      position: absolute;
+      top: 9px;
+      left: 7%;
+      right: 7%;
+      height: 1px;
+      background: linear-gradient(90deg, #6ce2d6, #f4a45a);
+    }
+    .phase-point {
+      position: relative;
+      padding-top: 24px;
+      color: #dce8ee;
+      font-size: 0.76rem;
+      text-align: center;
+    }
+    .phase-point::before {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: calc(50% - 6px);
+      width: 11px;
+      height: 11px;
+      border: 2px solid #0e344d;
+      border-radius: 50%;
+      background: #78ded4;
+      box-shadow: 0 0 0 2px rgba(255,255,255,.4);
+    }
+    .phase-point:last-child::before { background: #ee9a4f; }
+    .phase-point b { display: block; color: #fff; font-size: 0.95rem; }
+    .phase-point.missing em {
+      display: block;
+      margin-top: 2px;
+      color: #ffd7ac;
+      font-size: 0.68rem;
+      font-style: normal;
+    }
+
+    section {
+      margin-top: 22px;
+      padding: clamp(24px, 3.8vw, 44px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: 0 8px 28px rgba(25, 48, 69, 0.055);
+    }
+    .section-label {
+      margin: 0 0 5px;
+      color: var(--specific);
+      font-size: 0.72rem;
+      font-weight: 850;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    h2 {
+      margin: 0 0 20px;
+      color: var(--ink);
+      font-size: clamp(1.55rem, 2.8vw, 2.35rem);
+      line-height: 1.18;
+      letter-spacing: -0.025em;
+    }
+    h3 {
+      margin: 28px 0 12px;
+      color: var(--ink);
+      font-size: 1.2rem;
+      line-height: 1.35;
+    }
+    p { margin: 0.8em 0; }
+    .lead { color: #34495b; font-size: 1.07rem; }
+
+    .takeaways {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .takeaway {
+      padding: 18px 19px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--raw);
+      border-radius: 10px;
+      background: var(--soft);
+    }
+    .takeaway.specific { border-top-color: var(--specific); }
+    .takeaway.coherent { border-top-color: var(--coherent); }
+    .takeaway.warning { border-top-color: var(--abnormal); }
+    .takeaway strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--ink);
+      font-size: 1.02rem;
+    }
+    .takeaway p { margin: 0; color: var(--muted); font-size: 0.91rem; }
+
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0,1fr));
+      gap: 10px;
+      margin: 22px 0 5px;
+    }
+    .metric {
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fbfcfd;
+    }
+    .metric small { display: block; color: var(--muted); font-weight: 700; }
+    .metric b { display: block; color: var(--ink); font-size: 1.45rem; line-height: 1.2; }
+    .metric span { color: var(--muted); font-size: 0.75rem; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0,1fr));
+      gap: 8px;
+      margin: 22px 0;
+      counter-reset: flow;
+    }
+    .flow div {
+      position: relative;
+      padding: 16px 14px 14px 42px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--soft);
+      font-size: 0.87rem;
+    }
+    .flow div::before {
+      counter-increment: flow;
+      content: counter(flow);
+      position: absolute;
+      top: 14px;
+      left: 13px;
+      display: grid;
+      place-items: center;
+      width: 21px;
+      height: 21px;
+      border-radius: 50%;
+      color: white;
+      background: var(--ink);
+      font-size: .7rem;
+      font-weight: 800;
+    }
+    .flow b { display: block; color: var(--ink); }
+
+    .callout {
+      margin: 20px 0;
+      padding: 15px 17px;
+      border-left: 4px solid var(--warning-line);
+      border-radius: 7px;
+      background: var(--warning-bg);
+      color: #614c37;
+      font-size: 0.92rem;
+    }
+    .callout.ok {
+      border-color: var(--specific);
+      background: var(--ok-bg);
+      color: #205d58;
+    }
+
+    figure { margin: 26px 0 10px; }
+    figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    figcaption {
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      line-height: 1.55;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 18px;
+      margin: 10px 0 20px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-right: 6px;
+      border-radius: 2px;
+      background: var(--raw);
+    }
+    .legend .specific::before { background: var(--specific); }
+    .legend .coherent::before { background: var(--coherent); }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin: 18px 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+      font-variant-numeric: tabular-nums;
+    }
+    caption {
+      padding: 13px 14px;
+      color: var(--ink);
+      background: #edf3f6;
+      font-weight: 800;
+      text-align: left;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e2e9ee;
+      text-align: right;
+      white-space: nowrap;
+    }
+    th {
+      color: #3c5062;
+      background: #f8fafb;
+      font-size: 0.76rem;
+      letter-spacing: 0.02em;
+    }
+    th:first-child, td:first-child,
+    th:nth-child(2), td:nth-child(2) { text-align: left; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #f5faf9; }
+    .condition-raw { color: var(--raw); font-weight: 800; }
+    .condition-specific { color: var(--specific); font-weight: 800; }
+    .condition-coherent { color: var(--coherent); font-weight: 800; }
+    .best { color: #006b63; background: #eaf6f3; font-weight: 850; }
+    .table-wrap .missing { color: #95612c; background: #fff4e8; }
+
+    details {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcfd;
+    }
+    summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      color: var(--ink);
+      font-weight: 800;
+    }
+    details[open] summary { border-bottom: 1px solid var(--line); }
+    .details-body { padding: 2px 16px 16px; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 14px;
+    }
+    .note-card {
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--soft);
+    }
+    .note-card h3 { margin-top: 0; font-size: 1.05rem; }
+    .note-card p, .note-card li { font-size: 0.9rem; }
+    ul, ol { padding-left: 1.3em; }
+    li + li { margin-top: 7px; }
+
+    footer {
+      margin-top: 22px;
+      padding: 24px 8px 12px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    footer p { margin: 5px 0; }
+
+    @media (max-width: 1040px) {
+      .shell { grid-template-columns: 1fr; }
+      .rail { position: static; padding: 16px 18px; }
+      .rail nav { display: flex; flex-wrap: wrap; gap: 3px 10px; }
+      .rail nav a { border-left: 0; border-bottom: 2px solid transparent; }
+      .rail-meta { display: none; }
+      .takeaways, .two-col { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 700px) {
+      .shell { width: min(calc(100% - 18px), 1440px); margin-top: 9px; gap: 10px; }
+      .hero, section { border-radius: 11px; }
+      .hero { padding: 27px 20px; }
+      section { padding: 24px 18px; }
+      .phase-track { grid-template-columns: repeat(5, 1fr); }
+      .phase-point { font-size: 0.65rem; }
+      .phase-point b { font-size: 0.8rem; }
+      .metric-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .flow { grid-template-columns: 1fr; }
+      figure { margin-inline: -7px; }
+      figure img { border-radius: 7px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+    @media print {
+      body { background: #fff; font-size: 10pt; }
+      .shell { display: block; width: 100%; margin: 0; }
+      .rail { display: none; }
+      .hero, section { box-shadow: none; break-inside: avoid; }
+      section { margin-top: 12px; }
+      details { break-inside: auto; }
+      details > * { display: block !important; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="报告目录">
+      <p class="rail-kicker">ECMAD · TUAB</p>
+      <p class="rail-title">分量分类实验<br>描述性分析</p>
+      <nav>
+        <a href="#summary">结论速览</a>
+        <a href="#scope">数据与口径</a>
+        <a href="#ranking">排序性能</a>
+        <a href="#operating">阈值工作点</a>
+        <a href="#shap">XGBoost 解释</a>
+        <a href="#limits">局限与建议</a>
+        <a href="#appendix">完整指标</a>
+      </nav>
+      <p class="rail-meta">
+        数据快照：2026-08-27<br>
+        来源：<span class="mono">results/tuab_results</span><br>
+        报告性质：描述性、单次实验快照
+      </p>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <p class="eyebrow">TUAB continuous-component experiment</p>
+        <h1>EEGNet 与 XGBoost<br>分量分类结果</h1>
+        <p class="deck">
+          基于脚本 17–20 生成的 Raw、ECMAD-specific 与 coherent 三分量独立模型，
+          对五个 phase-gate 阈值进行记录级描述性比较。
+        </p>
+        <div class="hero-tags" aria-label="报告关键标签">
+          <span>2,973 条记录</span>
+          <span>patient-disjoint</span>
+          <span>1 = normal</span>
+          <span>20 s epochs</span>
+          <span>单次测试评估 / 每次训练</span>
+        </div>
+        <div class="phase-track" aria-label="分析的相位门限：0.01、0.05、0.1、0.5 和 1.0 弧度">
+          <div class="phase-point missing"><b>0.01</b>rad<em>XGB 缺失</em></div>
+          <div class="phase-point"><b>0.05</b>rad</div>
+          <div class="phase-point"><b>0.1</b>rad</div>
+          <div class="phase-point"><b>0.5</b>rad</div>
+          <div class="phase-point"><b>1.0</b>rad</div>
+        </div>
+      </header>
+
+      <section id="summary">
+        <p class="section-label">Executive readout</p>
+        <h2>结论速览</h2>
+        <div class="takeaways">
+          <article class="takeaway">
+            <strong>Raw 仍是最稳健的总体基线</strong>
+            <p>EEGNet 的 Raw 测试 AUROC/AUPRC 约为 0.824/0.810；XGBoost 为 0.911/0.920。没有任何分量设置同时在两种模型及两项排序指标上稳定超过 Raw。</p>
+          </article>
+          <article class="takeaway specific">
+            <strong>XGBoost-specific 在 0.1 rad 基本保留 Raw 信息</strong>
+            <p>测试 AUROC 0.911、AUPRC 0.920，与 Raw 相差 −0.001/+0.000；balanced accuracy 与 macro-F1 分别高约 0.013/0.012。该相位也具有最高 specific 验证 AUROC。</p>
+          </article>
+          <article class="takeaway coherent">
+            <strong>Coherent 分量仍承载明显类别结构</strong>
+            <p>XGBoost coherent 的 AUROC 随相位阈值从 0.826 上升至 0.851；EEGNet coherent 的最好测试 AUROC 为 0.800。它不能被简单等同于“纯伪迹”。</p>
+          </article>
+          <article class="takeaway warning">
+            <strong>测试集曲线不能直接用于确定最佳相位</strong>
+            <p>五个相位都已触达同一测试集，且仅有单个 seed/单次训练。图中“最好测试值”只能描述当前快照；正式相位选择应在验证集完成后锁定，再做一次测试。</p>
+          </article>
+        </div>
+        <div class="metric-strip" aria-label="关键规模统计">
+          <div class="metric"><small>训练记录</small><b>2,428</b><span>1,863 patients</span></div>
+          <div class="metric"><small>验证记录</small><b>270</b><span>207 patients</span></div>
+          <div class="metric"><small>测试记录</small><b>275</b><span>252 patients</span></div>
+          <div class="metric"><small>可用 epochs</small><b>158,072</b><span>三划分合计</span></div>
+        </div>
+      </section>
+
+      <section id="scope">
+        <p class="section-label">Data &amp; protocol</p>
+        <h2>数据范围与分析口径</h2>
+        <p class="lead">
+          本报告只读取 <code>results/tuab_results/results</code> 内现有产物；不重新训练模型、不改写预测或配置。五个相位目录的记录身份、标签、划分和 epoch 数完全一致。
+        </p>
+
+        <div class="flow" aria-label="实验数据流">
+          <div><b>Script 17</b>连续 TUAB 记录上进行 phase-gated ECMAD 分解</div>
+          <div><b>Script 18</b>用共享 Raw 拒绝掩码形成配对 20 s epochs</div>
+          <div><b>Script 19</b>Raw / specific / coherent 三个独立 EEGNet</div>
+          <div><b>Script 20</b>base211 特征上的三个独立 XGBoost</div>
+        </div>
+
+        <figure>
+          <img src="figures/tuab_component_dataset_composition.png"
+               alt="训练、验证和测试划分中异常与正常记录及 epoch 的数量和比例。三组记录类别接近平衡，测试集正常记录略多。">
+          <figcaption>
+            图 1｜划分组成。测试集为 126 条 abnormal 与 149 条 normal 记录；正类基线比例为 149/275 = 54.2%。患者在 train / validation / test 之间不重叠。
+          </figcaption>
+        </figure>
+
+        <div class="two-col">
+          <div class="note-card">
+            <h3>统一重算的报告指标</h3>
+            <p>为跨模型保持同一定义，图表从各条件的记录级 <code>test_predictions.csv</code> 重新计算：</p>
+            <ul>
+              <li>AUROC 与 AUPRC（正类为 <b>normal = 1</b>）；</li>
+              <li>frozen threshold 下的 balanced accuracy 与 macro-F1。</li>
+            </ul>
+          </div>
+          <div class="note-card">
+            <h3>模型自己的选择规则</h3>
+            <ul>
+              <li><b>EEGNet：</b>checkpoint 按 validation recording AUPRC；阈值按 validation balanced accuracy。</li>
+              <li><b>XGBoost：</b>模型搜索/早停沿用 AUROC 语义；决策阈值按 validation macro-F1。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout">
+          <b>覆盖缺口：</b>0.01 rad 目录含完整 EEGNet 结果，但 Script 20 只留下 <code>config_resolved.yaml</code>，没有 <code>base211</code> 模型、指标或预测。因此 XGBoost 曲线从 0.05 rad 开始，不能把缺失值当作失败或零分。
+        </div>
+
+        <details>
+          <summary>查看预处理与模型配置快照</summary>
+          <div class="details-body">
+            <ul>
+              <li>19 channels，125 Hz，0.5–40 Hz；非重叠 20 s epochs；Raw 派生的 200 µV 拒绝规则共享给三分量。</li>
+              <li>phase-gate 阈值：0.01、0.05、0.1、0.5、1.0 rad；coherence threshold 0.15；Wiener <code>nperseg=500</code>。</li>
+              <li>EEGNet：F1=8、D=2、dropout=0.25、batch size=64、records per step=4、random state=42；CUDA。</li>
+              <li>XGBoost：base211 特征；5-fold grouped CV；random state=42；CUDA；三条件各自训练。</li>
+              <li>0.01 rad EEGNet 的 <code>num_workers=0</code>，其余为 10。该参数主要影响记录加载，但也进入条件指纹，因此执行配置并非完全一致。</li>
+            </ul>
+          </div>
+        </details>
+      </section>
+
+      <section id="ranking">
+        <p class="section-label">Ranking performance</p>
+        <h2>排序性能：Raw 最稳，specific 的模型依赖明显</h2>
+        <div class="legend" aria-label="图中条件颜色图例">
+          <span>Raw</span><span class="specific">Specific</span><span class="coherent">Coherent</span>
+        </div>
+        <figure>
+          <img src="figures/tuab_component_ranking_metrics.png"
+               alt="EEGNet 与 XGBoost 在不同相位阈值下的记录级 AUROC 和 AUPRC 折线。Raw 基线在两个模型中最稳定；XGBoost specific 在 0.1 rad 接近 Raw；EEGNet specific 在 0.01 rad 最接近 Raw。">
+          <figcaption>
+            图 2｜记录级 AUROC/AUPRC。两项指标不依赖决策阈值，最适合跨脚本 19/20 比较。XGBoost 0.01 rad 结果缺失，以阴影区标出。
+          </figcaption>
+        </figure>
+
+        <h3>EEGNet</h3>
+        <p>
+          Raw 在五次训练中的测试 AUROC 位于 0.82385–0.82396、AUPRC 位于 0.80978–0.80994，汇总指标高度稳定。Specific 只有 0.01 rad 接近 Raw（AUROC 0.815，AUPRC 0.796），随后在 0.05–1.0 rad 明显下降；这说明当前 EEGNet 对 specific 分量及其相位设置敏感。
+        </p>
+        <p>
+          如果跨相位仍按 EEGNet 的验证记录 AUPRC 选择，specific 应选 0.05 rad（validation AUPRC 0.809），而不是测试表现更高的 0.01 rad；其对应测试 AUPRC 只有 0.714。这种验证—测试反转提示单次训练的相位排序不稳定，不能据当前测试曲线事后选相位。
+        </p>
+
+        <h3>XGBoost</h3>
+        <p>
+          XGBoost 的 Raw 测试 AUROC/AUPRC 约为 0.911/0.920。Specific 在 0.1 rad 达到 0.911/0.920，几乎复现 Raw 的记录排序；同时它也有四个 XGBoost-specific 实验中最高的 validation AUROC（0.905），因此是本快照中最有验证依据的 specific 候选。
+        </p>
+        <p>
+          Coherent 的 AUROC 随阈值从 0.826 上升至 0.851，AUPRC 从 0.804 上升至 0.846，但仍低于 Raw/specific。这一趋势表明较大 phase-gate 阈值下 coherent 分量包含更多可用于 TUAB 正常/异常排序的信息；它不说明这些信息是生理信号还是数据集相关伪迹。
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>表 1｜按验证指标讨论的候选及其测试表现</caption>
+            <thead>
+              <tr><th scope="col">模型 / 条件</th><th scope="col">相位 (rad)</th><th scope="col">验证依据</th><th scope="col">Test AUROC</th><th scope="col">Test AUPRC</th><th scope="col">相对 Raw</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>EEGNet / Raw</td><td>相位无关基线</td><td>重复训练汇总稳定</td><td>0.824</td><td>0.810</td><td>—</td></tr>
+              <tr><td class="condition-specific">EEGNet / Specific</td><td>0.05</td><td>最高 val AUPRC = 0.809</td><td>0.750</td><td>0.714</td><td>−0.074 / −0.096</td></tr>
+              <tr><td class="condition-coherent">EEGNet / Coherent</td><td>0.5</td><td>最高 val AUPRC = 0.800</td><td>0.784</td><td>0.761</td><td>−0.039 / −0.049</td></tr>
+              <tr><td>XGBoost / Raw</td><td>相位无关基线</td><td>重复训练汇总稳定</td><td>0.911</td><td>0.920</td><td>—</td></tr>
+              <tr class="best"><td>XGBoost / Specific</td><td>0.1</td><td>最高 val AUROC = 0.905</td><td>0.911</td><td>0.920</td><td>−0.001 / +0.000</td></tr>
+              <tr><td class="condition-coherent">XGBoost / Coherent</td><td>0.5 / 1.0</td><td>val AUROC 并列 0.860</td><td>0.847 / 0.851</td><td>0.842 / 0.846</td><td>均低于 Raw</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="operating">
+        <p class="section-label">Frozen thresholds</p>
+        <h2>阈值工作点：局部提升不等于排序改善</h2>
+        <p class="lead">
+          Balanced accuracy 与 macro-F1 取决于验证集选出的 frozen threshold。由于 EEGNet 与 XGBoost 的阈值优化目标不同，这里以“相对同模型、同相位 Raw 的差值”展示，不把绝对值作为直接架构排名。
+        </p>
+        <figure>
+          <img src="figures/tuab_component_operating_deltas.png"
+               alt="Specific 和 coherent 相对 Raw 的 balanced accuracy 与 macro-F1 差值热图。EEGNet coherent 在 0.05 和 0.5 rad 略高于 Raw；XGBoost specific 在 0.1 rad 略高于 Raw；其他多数分量设置低于 Raw。">
+          <figcaption>
+            图 3｜阈值相关指标相对 Raw 的变化。蓝色为高于 Raw，红色为低于 Raw；所有值均使用对应训练运行在验证集冻结的阈值。
+          </figcaption>
+        </figure>
+
+        <div class="two-col">
+          <div class="note-card">
+            <h3>可取的观察</h3>
+            <ul>
+              <li>EEGNet coherent 0.5 rad 的 balanced accuracy 为 0.755，较 Raw 高 0.005；macro-F1 高 0.011。</li>
+              <li>XGBoost specific 0.1 rad 的 balanced accuracy 为 0.832、macro-F1 为 0.834，均较 Raw 高约 0.01。</li>
+              <li>XGBoost coherent 随相位增大总体改善，但阈值指标仍未超过 Raw。</li>
+            </ul>
+          </div>
+          <div class="note-card">
+            <h3>不能据此声称的结论</h3>
+            <ul>
+              <li>EEGNet coherent 0.5 rad 的 AUROC/AUPRC 仍比 Raw 低 0.039/0.049，因此工作点提升不是整体排序提升。</li>
+              <li>EEGNet coherent 1.0 rad 的正类 F1 较高，主要伴随 normal recall 0.906 与 abnormal specificity 0.571 的不平衡。</li>
+              <li>没有重复 seed、置信区间或配对检验，约 0.01 的差值不能自动解释为稳健增益。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="shap">
+        <p class="section-label">XGBoost interpretation</p>
+        <h2>SHAP 模式：specific 接近 Raw，coherent 更集中</h2>
+        <p>
+          Script 20 为四个完整相位的三个 XGBoost 条件生成了 SHAP 产物。下图聚焦 validation AUROC 支持的 0.1 rad specific 候选，并把每一行的平均绝对 SHAP 归一化为 100%，用于比较单个模型内部的结构，而非跨模型比较绝对幅度。
+        </p>
+        <figure>
+          <img src="figures/tuab_xgboost_shap_patterns_phase01.png"
+               alt="0.1 rad XGBoost 的归一化 SHAP 热图。Raw 和 specific 的重要性分布相似，集中在 theta、alpha、Hjorth、asymmetry 以及 T6、P4、T4、O2；coherent 主要集中在 beta 和 F4、C4、T4、T6。">
+          <figcaption>
+            图 4｜0.1 rad、base211 XGBoost 的相对 |SHAP|。未显示 wavelet、connectivity、complexity 与 temporal，因为这些块不属于 base211，聚合值为 0。
+          </figcaption>
+        </figure>
+        <ul>
+          <li><b>Raw 与 specific：</b>特征族构成接近，Hjorth、theta、alpha 与 asymmetry 合计占主要部分；通道侧以 T6、P4、T4、O2 较突出。这与 0.1 rad specific 基本保留 Raw 排序性能一致。</li>
+          <li><b>Coherent：</b>重要性明显集中到 beta（34.8%）以及 T4、C4、T6、F4。集中不等同于因果或生理来源，只说明该独立分类器主要使用这些可用特征。</li>
+          <li><b>解释边界：</b>SHAP 描述训练后模型如何利用特征，不验证 ECMAD 是否实现了生理意义上的“伪迹去除”或“信号保真”。</li>
+        </ul>
+      </section>
+
+      <section id="limits">
+        <p class="section-label">Interpretation boundary</p>
+        <h2>局限、风险与下一步</h2>
+        <div class="two-col">
+          <div class="note-card">
+            <h3>当前证据边界</h3>
+            <ol>
+              <li><b>单划分、单 seed：</b>没有 grouped repeats 或 seed 分布，无法估计训练方差。</li>
+              <li><b>多次触达测试集：</b>相位网格的测试曲线只能描述，不能作为无偏超参数选择证据。</li>
+              <li><b>模型协议不完全同构：</b>EEGNet 使用标准化时序张量；XGBoost 使用 base211 手工特征；阈值选择目标也不同。</li>
+              <li><b>Raw 不是单一共享模型：</b>每个相位目录都重新训练 Raw。汇总指标极稳定，但 0.5 rad 的 XGBoost Raw 概率并非与其他相位逐记录完全相同。</li>
+              <li><b>分类是间接指标：</b>TUAB 正常/异常性能衡量下游效用，不直接证明 ECMAD 的去噪质量、伪迹移除或生理信号保留。</li>
+            </ol>
+          </div>
+          <div class="note-card">
+            <h3>建议的确认路径</h3>
+            <ol>
+              <li>将 <b>XGBoost-specific 0.1 rad</b> 作为验证支持的候选，而不是结论；在预先固定的 grouped repeats / 多 seed 上复现。</li>
+              <li>用 validation AUPRC 或 AUROC 明确唯一相位选择规则；锁定相位后只做一次最终测试。</li>
+              <li>如需完整五点对照，补跑 0.01 rad Script 20，并核对模型、预测、SHAP 产物齐全。</li>
+              <li>跨模型统一阈值选择策略，或将主要比较限定在 AUROC/AUPRC。</li>
+              <li>并行报告直接信号质量指标、分量能量/频谱/空间结构与 artifact proxy，避免把分类性能等同于去噪质量。</li>
+            </ol>
+          </div>
+        </div>
+        <div class="callout ok">
+          <b>最审慎的当前表述：</b>在该固定 TUAB 划分和单次训练快照中，0.1 rad ECMAD-specific 的 base211 XGBoost 几乎保留了 Raw 的记录级排序性能，并在 frozen threshold 工作点上略有提高；这一现象未在 EEGNet 中复现，尚不足以宣称普遍性能增益。
+        </div>
+      </section>
+
+      <section id="appendix">
+        <p class="section-label">Metric ledger</p>
+        <h2>完整测试指标</h2>
+        <p>
+          以下 AUROC、AUPRC、balanced accuracy 与 macro-F1 均按同一定义从记录级预测重算。Threshold 为各训练运行在验证集冻结的原始阈值；EEGNet 同时列出最佳 checkpoint epoch。
+        </p>
+
+        <details>
+          <summary>EEGNet：5 相位 × 3 条件</summary>
+          <div class="details-body">
+            <div class="table-wrap">
+              <table>
+                <caption>表 A1｜EEGNet test recording metrics</caption>
+                <thead><tr><th scope="col">Phase</th><th scope="col">Condition</th><th scope="col">AUROC</th><th scope="col">AUPRC</th><th scope="col">Bal. Acc.</th><th scope="col">Macro-F1</th><th scope="col">Threshold</th><th scope="col">Best epoch</th></tr></thead>
+                <tbody>
+                  <tr><td>0.01</td><td class="condition-raw">Raw</td><td>0.824</td><td>0.810</td><td>0.749</td><td>0.745</td><td>0.590</td><td>2</td></tr>
+                  <tr><td>0.01</td><td class="condition-specific">Specific</td><td>0.815</td><td>0.796</td><td>0.730</td><td>0.730</td><td>0.525</td><td>4</td></tr>
+                  <tr><td>0.01</td><td class="condition-coherent">Coherent</td><td>0.772</td><td>0.761</td><td>0.675</td><td>0.674</td><td>0.495</td><td>4</td></tr>
+                  <tr><td>0.05</td><td class="condition-raw">Raw</td><td>0.824</td><td>0.810</td><td>0.749</td><td>0.745</td><td>0.590</td><td>2</td></tr>
+                  <tr><td>0.05</td><td class="condition-specific">Specific</td><td>0.750</td><td>0.714</td><td>0.667</td><td>0.665</td><td>0.555</td><td>3</td></tr>
+                  <tr><td>0.05</td><td class="condition-coherent">Coherent</td><td>0.800</td><td>0.762</td><td>0.750</td><td>0.752</td><td>0.585</td><td>21</td></tr>
+                  <tr><td>0.1</td><td class="condition-raw">Raw</td><td>0.824</td><td>0.810</td><td>0.749</td><td>0.745</td><td>0.590</td><td>2</td></tr>
+                  <tr><td>0.1</td><td class="condition-specific">Specific</td><td>0.731</td><td>0.706</td><td>0.654</td><td>0.647</td><td>0.550</td><td>3</td></tr>
+                  <tr><td>0.1</td><td class="condition-coherent">Coherent</td><td>0.761</td><td>0.772</td><td>0.668</td><td>0.667</td><td>0.520</td><td>4</td></tr>
+                  <tr><td>0.5</td><td class="condition-raw">Raw</td><td>0.824</td><td>0.810</td><td>0.749</td><td>0.745</td><td>0.590</td><td>2</td></tr>
+                  <tr><td>0.5</td><td class="condition-specific">Specific</td><td>0.750</td><td>0.752</td><td>0.643</td><td>0.636</td><td>0.590</td><td>4</td></tr>
+                  <tr><td>0.5</td><td class="condition-coherent">Coherent</td><td>0.784</td><td>0.761</td><td>0.755</td><td>0.756</td><td>0.550</td><td>22</td></tr>
+                  <tr><td>1.0</td><td class="condition-raw">Raw</td><td>0.824</td><td>0.810</td><td>0.749</td><td>0.745</td><td>0.590</td><td>2</td></tr>
+                  <tr><td>1.0</td><td class="condition-specific">Specific</td><td>0.755</td><td>0.738</td><td>0.696</td><td>0.697</td><td>0.565</td><td>4</td></tr>
+                  <tr><td>1.0</td><td class="condition-coherent">Coherent</td><td>0.790</td><td>0.748</td><td>0.739</td><td>0.739</td><td>0.580</td><td>2</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>XGBoost：4 个完整相位 × 3 条件</summary>
+          <div class="details-body">
+            <div class="table-wrap">
+              <table>
+                <caption>表 A2｜XGBoost test recording metrics（0.01 rad 缺失）</caption>
+                <thead><tr><th scope="col">Phase</th><th scope="col">Condition</th><th scope="col">AUROC</th><th scope="col">AUPRC</th><th scope="col">Bal. Acc.</th><th scope="col">Macro-F1</th><th scope="col">Threshold</th></tr></thead>
+                <tbody>
+                  <tr><td>0.05</td><td class="condition-raw">Raw</td><td>0.911</td><td>0.920</td><td>0.820</td><td>0.822</td><td>0.500</td></tr>
+                  <tr><td>0.05</td><td class="condition-specific">Specific</td><td>0.907</td><td>0.915</td><td>0.821</td><td>0.823</td><td>0.515</td></tr>
+                  <tr><td>0.05</td><td class="condition-coherent">Coherent</td><td>0.826</td><td>0.804</td><td>0.762</td><td>0.762</td><td>0.530</td></tr>
+                  <tr><td>0.1</td><td class="condition-raw">Raw</td><td>0.911</td><td>0.920</td><td>0.820</td><td>0.822</td><td>0.500</td></tr>
+                  <tr class="best"><td>0.1</td><td>Specific</td><td>0.911</td><td>0.920</td><td>0.832</td><td>0.834</td><td>0.520</td></tr>
+                  <tr><td>0.1</td><td class="condition-coherent">Coherent</td><td>0.829</td><td>0.806</td><td>0.774</td><td>0.775</td><td>0.510</td></tr>
+                  <tr><td>0.5</td><td class="condition-raw">Raw</td><td>0.911</td><td>0.920</td><td>0.820</td><td>0.822</td><td>0.510</td></tr>
+                  <tr><td>0.5</td><td class="condition-specific">Specific</td><td>0.902</td><td>0.914</td><td>0.803</td><td>0.806</td><td>0.490</td></tr>
+                  <tr><td>0.5</td><td class="condition-coherent">Coherent</td><td>0.847</td><td>0.842</td><td>0.786</td><td>0.788</td><td>0.510</td></tr>
+                  <tr><td>1.0</td><td class="condition-raw">Raw</td><td>0.911</td><td>0.920</td><td>0.820</td><td>0.822</td><td>0.500</td></tr>
+                  <tr><td>1.0</td><td class="condition-specific">Specific</td><td>0.903</td><td>0.916</td><td>0.806</td><td>0.809</td><td>0.495</td></tr>
+                  <tr><td>1.0</td><td class="condition-coherent">Coherent</td><td>0.851</td><td>0.846</td><td>0.768</td><td>0.769</td><td>0.535</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>产物完整性与来源说明</summary>
+          <div class="details-body">
+            <ul>
+              <li>EEGNet 五个相位均含 <code>condition_metrics.csv</code>、三条件模型/预测、<code>run_summary.json</code> 与 <code>split_manifest.csv</code>。</li>
+              <li>XGBoost 在 0.05、0.1、0.5、1.0 rad 均含三条件模型、val/test 预测、指标与 SHAP；0.01 rad 仅发现配置文件。</li>
+              <li>所有可比相位的语义清单均为 2,973 条记录、158,072 epochs；每个测试预测表均为 275 条记录。</li>
+              <li>报告没有使用 epoch-level 预测评价模型优劣；epoch 数仅用于描述数据规模。</li>
+            </ul>
+          </div>
+        </details>
+      </section>
+
+      <footer>
+        <p><b>TUAB ECMAD component classification descriptive report</b> · 生成日期：2026-08-27</p>
+        <p>数据根：<code>results/tuab_results/results</code> · 图表：<code>docs/figures/tuab_component_*.png</code></p>
+        <p>本报告为现有实验产物的描述性整理，不构成对总体性能差异的统计显著性结论。</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>
