@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ERN 预处理条件实验｜数据可视化报告</title>
+  <style>
+    :root {
+      --canvas: #071217;
+      --surface: #0d1c22;
+      --surface-2: #12272e;
+      --text: #edf8f7;
+      --muted: #9bb2b4;
+      --line: #264047;
+      --cyan: #59dfd1;
+      --cyan-2: #1ca59d;
+      --amber: #f4bd6a;
+      --coral: #ff7d79;
+      --lavender: #bda8ff;
+      --blue: #62a8ff;
+      --radius: 18px;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .28);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 85% 4%, rgba(89, 223, 209, .09), transparent 27rem),
+        linear-gradient(180deg, #061015 0%, var(--canvas) 100%);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
+    button, select { font: inherit; }
+    a { color: var(--cyan); }
+    :focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
+    .shell { width: min(1480px, calc(100% - 40px)); margin: 0 auto; }
+    .hero { min-height: 560px; padding: 54px 0 38px; position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 64px; align-items: center; }
+    .eyebrow { margin: 0 0 18px; color: var(--cyan); font: 700 12px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 850px; font-size: clamp(42px, 6.3vw, 92px); line-height: .96; letter-spacing: -.055em; }
+    h1 span { color: var(--cyan); }
+    .lede { max-width: 740px; margin: 28px 0 0; color: #bed0d1; font-size: clamp(17px, 2vw, 22px); }
+    .hero-note { display: inline-flex; gap: 10px; align-items: center; margin-top: 26px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 13px; }
+    .hero-note::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 18px var(--amber); }
+    .signal-panel { position: relative; min-height: 390px; display: grid; place-items: center; }
+    .signal-panel svg { width: 100%; height: auto; filter: drop-shadow(0 26px 40px rgba(0, 0, 0, .3)); }
+    .hero-stamp { position: absolute; right: 6%; bottom: 3%; width: 126px; height: 126px; border: 1px solid rgba(89,223,209,.35); border-radius: 50%; display: grid; place-items: center; text-align: center; color: var(--cyan); font: 700 11px/1.35 var(--mono); letter-spacing: .08em; transform: rotate(8deg); background: rgba(7,18,23,.72); }
+    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+    .kpi { background: var(--canvas); padding: 26px 30px; min-height: 142px; }
+    .kpi-label { color: var(--muted); font-size: 13px; }
+    .kpi-value { display: block; margin-top: 8px; font: 700 clamp(28px, 3vw, 44px)/1 var(--mono); letter-spacing: -.05em; }
+    .kpi small { display: block; margin-top: 10px; color: var(--cyan); font-size: 12px; }
+    .report { padding: 58px 0 90px; }
+    .section { margin-top: 78px; scroll-margin-top: 24px; }
+    .section:first-child { margin-top: 0; }
+    .section-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 520px); gap: 42px; align-items: end; margin-bottom: 24px; }
+    .section-kicker { color: var(--cyan); font: 700 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+    h2 { margin: 8px 0 0; font-size: clamp(28px, 4vw, 52px); line-height: 1.05; letter-spacing: -.035em; }
+    .section-head p { margin: 0; color: var(--muted); }
+    .card { background: rgba(13, 28, 34, .88); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+    .card-pad { padding: 24px; }
+    .grid-2 { display: grid; grid-template-columns: 1.15fr .85fr; gap: 18px; }
+    .grid-even { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .insights { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .insight { padding: 20px; border-top: 3px solid var(--cyan); background: var(--surface); border-radius: 0 0 14px 14px; }
+    .insight:nth-child(2) { border-color: var(--amber); }
+    .insight:nth-child(3) { border-color: var(--lavender); }
+    .insight strong { display: block; margin-bottom: 8px; font-size: 18px; }
+    .insight p { margin: 0; color: var(--muted); font-size: 14px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--line); background: rgba(18,39,46,.72); }
+    .control-group { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .control-label { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    select, .seg button {
+      min-height: 42px; border: 1px solid var(--line); color: var(--text); background: #0a171c; border-radius: 10px; padding: 0 12px;
+    }
+    .seg { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: #0a171c; }
+    .seg button { border: 0; min-height: 34px; color: var(--muted); cursor: pointer; }
+    .seg button[aria-pressed="true"] { color: #05211f; background: var(--cyan); }
+    .chart-wrap { padding: 20px; overflow-x: auto; }
+    svg.chart { display: block; width: 100%; min-width: 680px; height: auto; }
+    .chart text { fill: var(--muted); font-family: var(--sans); font-size: 12px; }
+    .chart .label { fill: var(--text); font-weight: 650; }
+    .chart .grid { stroke: var(--line); stroke-width: 1; }
+    .chart .axis { stroke: #547079; stroke-width: 1; }
+    .chart .raw-line { stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 5 5; }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 12px; padding: 0 24px 20px; }
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+    .annotation { padding: 16px 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; background: rgba(7,18,23,.55); }
+    .annotation strong { color: var(--text); }
+    .matrix-wrap { overflow-x: auto; }
+    .metric-matrix { width: 100%; border-collapse: separate; border-spacing: 4px; min-width: 860px; padding: 14px; }
+    .metric-matrix th { padding: 8px 10px; color: var(--muted); font-size: 11px; text-align: right; }
+    .metric-matrix th:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); z-index: 1; }
+    .metric-matrix td { padding: 10px; border-radius: 7px; text-align: right; font: 700 12px/1 var(--mono); color: #061416; }
+    .metric-matrix td:first-child { color: var(--text); text-align: left; font-family: var(--sans); background: var(--surface-2)!important; position: sticky; left: 0; z-index: 1; }
+    .mini-title { margin: 0 0 4px; font-size: 18px; }
+    .mini-sub { margin: 0; color: var(--muted); font-size: 13px; }
+    .scatter-note { display: flex; justify-content: space-between; gap: 18px; align-items: start; padding: 18px 22px; border-top: 1px solid var(--line); }
+    .scatter-note p { margin: 0; color: var(--muted); font-size: 13px; }
+    .confusion-layout { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(300px, 1.2fr); gap: 28px; align-items: center; }
+    .cmatrix { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; aspect-ratio: 1; max-width: 480px; }
+    .cm-cell { border-radius: 14px; padding: 18px; display: flex; flex-direction: column; justify-content: space-between; min-height: 130px; color: #061416; }
+    .cm-cell span { font-size: 12px; font-weight: 700; }
+    .cm-cell strong { font: 800 clamp(28px, 4vw, 52px)/1 var(--mono); letter-spacing: -.06em; }
+    .cm-caption { display: grid; gap: 12px; }
+    .cm-caption .big { font: 700 34px/1 var(--mono); color: var(--cyan); }
+    .cm-caption p { margin: 0; color: var(--muted); }
+    .splitbar { height: 30px; display: flex; border-radius: 999px; overflow: hidden; margin: 26px 0 12px; background: #071217; }
+    .splitbar span { display: block; height: 100%; }
+    .split-legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .split-legend strong { display: block; font: 700 24px/1 var(--mono); }
+    .split-legend span { color: var(--muted); font-size: 12px; }
+    .channels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+    .chip { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; color: #c5d6d7; background: #0a171c; font: 600 11px/1 var(--mono); }
+    .chip.off { color: #e4b6b4; border-color: rgba(255,125,121,.35); }
+    .table-wrap { overflow: auto; max-height: 700px; }
+    table.data { width: 100%; min-width: 1100px; border-collapse: collapse; }
+    table.data th, table.data td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    table.data th { position: sticky; top: 0; background: #102329; color: var(--muted); font-size: 11px; z-index: 2; cursor: pointer; }
+    table.data th:first-child, table.data td:first-child { text-align: left; position: sticky; left: 0; background: #0d1c22; z-index: 1; }
+    table.data th:first-child { z-index: 3; background: #102329; }
+    table.data td { font: 600 12px/1 var(--mono); }
+    table.data td:first-child { font-family: var(--sans); }
+    table.data tr:hover td { background: #132a31; }
+    table.data tr:hover td:first-child { background: #132a31; }
+    .rank { color: var(--cyan); margin-right: 8px; font: 700 11px/1 var(--mono); }
+    .caveat { display: grid; grid-template-columns: 220px 1fr; gap: 30px; padding: 28px; border-left: 4px solid var(--amber); }
+    .caveat h3 { margin: 0; font-size: 21px; }
+    .caveat ul { margin: 0; padding-left: 18px; color: var(--muted); }
+    footer { padding: 32px 0 50px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .tooltip { position: fixed; z-index: 30; pointer-events: none; opacity: 0; transform: translate(-50%, calc(-100% - 12px)); padding: 9px 11px; color: var(--text); background: #020708; border: 1px solid #42636c; border-radius: 9px; box-shadow: var(--shadow); font-size: 12px; transition: opacity .12s ease; white-space: nowrap; }
+    @media (max-width: 980px) {
+      .hero-grid, .section-head, .grid-2, .grid-even { grid-template-columns: 1fr; }
+      .signal-panel { min-height: 280px; max-width: 620px; }
+      .kpis { grid-template-columns: repeat(2, 1fr); }
+      .insights { grid-template-columns: 1fr; }
+      .confusion-layout { grid-template-columns: 1fr; }
+      .cmatrix { max-width: none; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 24px, 1480px); }
+      .hero { padding-top: 34px; }
+      .hero-grid { gap: 24px; }
+      .signal-panel { min-height: 220px; }
+      .hero-stamp { width: 94px; height: 94px; font-size: 9px; }
+      .kpis { grid-template-columns: 1fr 1fr; }
+      .kpi { padding: 20px 16px; min-height: 125px; }
+      .report { padding-top: 38px; }
+      .section { margin-top: 58px; }
+      .toolbar, .chart-wrap, .card-pad { padding: 16px; }
+      .caveat { grid-template-columns: 1fr; gap: 12px; }
+      .split-legend strong { font-size: 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none!important; } }
+    @media print {
+      :root { color-scheme: light; --canvas:#fff; --surface:#fff; --surface-2:#f3f7f7; --text:#102327; --muted:#455d62; --line:#cdd9db; }
+      body { background:#fff; } .hero { min-height:auto; } .signal-panel { display:none; } .hero-grid { grid-template-columns:1fr; }
+      .card { box-shadow:none; break-inside:avoid; } .toolbar { display:none; } .section { break-before:auto; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="shell hero-grid">
+      <div>
+        <p class="eyebrow">ERP-CORE · ERN · 14 preprocessing conditions</p>
+        <h1>误差相关负波<br><span>实验数据图谱</span></h1>
+        <p class="lede">从 16,049 个响应锁定试次出发，比较 Raw、ICA 与不同 <em>g</em> 参数下 coherent / specific / 双分支输入的分类表现。</p>
+        <div class="hero-note">描述性报告 · 不含置信区间与统计显著性检验</div>
+      </div>
+      <div class="signal-panel" aria-label="抽象的响应锁定 EEG 波形与电极布局图">
+        <svg viewBox="0 0 620 430" role="img" aria-labelledby="sigTitle sigDesc">
+          <title id="sigTitle">响应锁定 EEG 信号图形</title><desc id="sigDesc">由二十八个电极点和一条穿过零时刻的波形构成。</desc>
+          <defs><radialGradient id="headGlow"><stop stop-color="#17373d"/><stop offset="1" stop-color="#0a181d"/></radialGradient></defs>
+          <circle cx="310" cy="208" r="178" fill="url(#headGlow)" stroke="#2b5960" stroke-width="2"/>
+          <path d="M265 41 Q310 8 355 41" fill="none" stroke="#2b5960" stroke-width="2"/>
+          <path d="M132 193 Q98 208 132 224 M488 193 Q522 208 488 224" fill="none" stroke="#2b5960" stroke-width="2"/>
+          <g id="electrodes"></g>
+          <path d="M28 245 C74 240 86 252 113 245 S155 232 174 245 S214 271 236 245 S268 177 289 245 S323 321 347 245 S383 219 406 245 S448 253 468 245 S525 236 592 245" fill="none" stroke="#59dfd1" stroke-width="5" stroke-linecap="round"/>
+          <line x1="310" y1="48" x2="310" y2="382" stroke="#f4bd6a" stroke-width="1.5" stroke-dasharray="5 7"/>
+          <text x="321" y="374" fill="#f4bd6a" font-family="ui-monospace, monospace" font-size="12">response 0 ms</text>
+        </svg>
+        <div class="hero-stamp">250 Hz<br>−0.2 → 0.8 s<br>seed 42</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="kpis" aria-label="实验概览">
+    <div class="kpi"><span class="kpi-label">测试 AUROC 最高</span><span class="kpi-value">0.968</span><small>Raw · rank 1</small></div>
+    <div class="kpi"><span class="kpi-label">测试 AUPRC 最高</span><span class="kpi-value">0.778</span><small>g=1 · coherent+specific</small></div>
+    <div class="kpi"><span class="kpi-label">少数类占比</span><span class="kpi-value">11.3%</span><small>error / all trials</small></div>
+    <div class="kpi"><span class="kpi-label">训练轮数</span><span class="kpi-value">60</span><small>所有条件一致</small></div>
+  </div>
+
+  <main class="shell report">
+    <section class="section" id="summary">
+      <div class="section-head">
+        <div><span class="section-kicker">01 / reading</span><h2>先读结论，再看细节</h2></div>
+        <p>所有结论只描述该 JSON 中的单次划分结果。Raw 与部分双分支条件非常接近，微小差值不应脱离重复实验或置信区间解释。</p>
+      </div>
+      <div class="insights">
+        <article class="insight"><strong>Raw 的整体区分度最强</strong><p>测试 AUROC 0.9677、balanced accuracy 0.8969、F1 0.7734 均为最高；少数类召回率 0.8385。</p></article>
+        <article class="insight"><strong>g=1 双分支拿到最高 AUPRC</strong><p>coherent+specific 的 AUPRC 为 0.7781，比 Raw 高 0.0072；其 precision 也是 14 个条件中最高的 0.7438。</p></article>
+        <article class="insight"><strong>分量效果随 g 明显变化</strong><p>specific 在 g=0.02 时明显优于 coherent；到 g=1 时关系反转。双分支在各 g 下通常更稳定，但没有全面超过 Raw。</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="ranking">
+      <div class="section-head">
+        <div><span class="section-kicker">02 / ranking</span><h2>交互式性能排名</h2></div>
+        <p>选择指标并在绝对值与相对 Raw 差值之间切换。横线标记 Raw 基准，颜色区分输入分支。</p>
+      </div>
+      <div class="card">
+        <div class="toolbar">
+          <div class="control-group"><label class="control-label" for="rankMetric">指标</label><select id="rankMetric"><option value="auroc">AUROC</option><option value="auc_pr">AUPRC</option><option value="balanced_accuracy">Balanced accuracy</option><option value="f1_deviant">F1（error）</option><option value="precision_deviant">Precision（error）</option><option value="recall_deviant">Recall（error）</option><option value="accuracy">Accuracy</option></select></div>
+          <div class="seg" aria-label="显示模式"><button type="button" data-mode="absolute" aria-pressed="true">绝对值</button><button type="button" data-mode="delta" aria-pressed="false">相对 Raw</button></div>
+        </div>
+        <div class="chart-wrap"><svg id="rankChart" class="chart" viewBox="0 0 1100 620" role="img" aria-label="条件性能排序图"></svg></div>
+        <div class="legend"><span><i style="background:#f4bd6a"></i>Raw / ICA</span><span><i style="background:#59dfd1"></i>coherent</span><span><i style="background:#ff7d79"></i>specific</span><span><i style="background:#bda8ff"></i>coherent+specific</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="matrix">
+      <div class="section-head">
+        <div><span class="section-kicker">03 / profile</span><h2>指标指纹热图</h2></div>
+        <p>每列独立按最小—最大值着色，适合观察一个条件的“性能形状”；颜色深浅不能跨列比较绝对量级。</p>
+      </div>
+      <div class="card matrix-wrap"><table class="metric-matrix" id="metricMatrix"></table></div>
+    </section>
+
+    <section class="section" id="tradeoff">
+      <div class="section-head">
+        <div><span class="section-kicker">04 / trade-off</span><h2>少数类识别的取舍</h2></div>
+        <p>横轴 precision，纵轴 recall；气泡大小映射 F1。右上角代表更理想的错误试次识别，但这里没有展示校准与置信区间。</p>
+      </div>
+      <div class="grid-2">
+        <div class="card"><div class="chart-wrap"><svg id="prScatter" class="chart" viewBox="0 0 820 570" role="img" aria-label="少数类精确率召回率气泡图"></svg></div></div>
+        <div class="card card-pad">
+          <h3 class="mini-title">阈值如何改变错误结构</h3><p class="mini-sub">选择条件查看测试集混淆矩阵；行是真实类别，列是预测类别。</p>
+          <div class="control-group" style="margin:18px 0 22px"><label class="control-label" for="cmCondition">条件</label><select id="cmCondition"></select></div>
+          <div class="confusion-layout">
+            <div class="cmatrix" id="cmatrix"></div>
+            <div class="cm-caption"><div><span class="control-label">冻结阈值</span><div class="big" id="cmThr"></div></div><p id="cmSummary"></p><p id="cmRates"></p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="generalization">
+      <div class="section-head">
+        <div><span class="section-kicker">05 / generalization</span><h2>训练—测试落差</h2></div>
+        <p>连接线从训练指标指向测试指标。向左表示测试下降，向右表示测试上升；它是单次划分下的描述，不等同于正式的过拟合检验。</p>
+      </div>
+      <div class="card">
+        <div class="toolbar"><div class="control-group"><label class="control-label" for="gapMetric">指标</label><select id="gapMetric"><option value="auroc">AUROC</option><option value="auc_pr">AUPRC</option><option value="f1_deviant">F1（error）</option><option value="balanced_accuracy">Balanced accuracy</option></select></div></div>
+        <div class="chart-wrap"><svg id="gapChart" class="chart" viewBox="0 0 1100 620" role="img" aria-label="训练与测试指标哑铃图"></svg></div>
+        <div class="legend"><span><i style="background:#547079"></i>训练</span><span><i style="background:#59dfd1"></i>测试</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="data">
+      <div class="section-head">
+        <div><span class="section-kicker">06 / data anatomy</span><h2>数据构成与实验设定</h2></div>
+        <p>Raw / ICA 使用 16,049 个试次；g 条件使用 15,987 个试次，少 62 个。所有条件的测试集错误类均为 576 个。</p>
+      </div>
+      <div class="grid-even">
+        <div class="card card-pad">
+          <h3 class="mini-title">Raw / ICA 划分</h3><p class="mini-sub">9,548 / 1,685 / 4,816</p>
+          <div class="splitbar" aria-label="训练验证测试划分"><span style="width:59.49%;background:#59dfd1"></span><span style="width:10.5%;background:#f4bd6a"></span><span style="width:30.01%;background:#bda8ff"></span></div>
+          <div class="split-legend"><div><strong>59.5%</strong><span>训练</span></div><div><strong>10.5%</strong><span>验证</span></div><div><strong>30.0%</strong><span>测试</span></div></div>
+          <p class="annotation" style="margin:24px -24px -24px">全数据类别：14,232 correct / 1,817 error；error 占 11.32%，对应的训练类别权重约为 4.53。</p>
+        </div>
+        <div class="card card-pad">
+          <h3 class="mini-title">信号与通道</h3><p class="mini-sub">−0.2 至 0.8 秒 · 250 Hz · 28 个 EEG 通道</p>
+          <div class="channels" id="channelChips"></div>
+          <p class="mini-sub" style="margin-top:18px">排除通道</p><div class="channels" id="excludedChips"></div>
+          <p class="annotation" style="margin:24px -24px -24px">频带元数据：δ 0.5–4、θ 4–8、α 8–13、β 13–30、γ 30–45 Hz。JSON 未包含逐频带结果或 SHAP 值。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="table">
+      <div class="section-head">
+        <div><span class="section-kicker">07 / audit table</span><h2>完整指标表</h2></div>
+        <p>点击列标题排序。所有值来自测试集；Δ AUPRC 以 Raw 为基准。</p>
+      </div>
+      <div class="card table-wrap"><table class="data"><thead id="dataHead"></thead><tbody id="dataBody"></tbody></table></div>
+    </section>
+
+    <section class="section">
+      <div class="card caveat">
+        <h3>解释边界</h3>
+        <ul>
+          <li>该文件提供单个 seed（42）和单次数据划分，没有 bootstrap、交叉验证分布或受试者级不确定性；0.005–0.01 量级的差值尤其不宜宣称稳定优势。</li>
+          <li>文件名含 “SHAP”，但 JSON 中没有 SHAP values、特征名或聚合归因结果，因此本报告不构造任何特征重要性结论。</li>
+          <li>coherent 与 specific 的生理含义不能由分类性能单独证明；预测归因也不等同于因果机制或伪迹来源。</li>
+          <li>Raw / ICA 与 g 条件的总试次数不同（差 62），横向比较时应确认排除试次是否在条件间一致，以及划分是否共享同一受试者集合。</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer><div class="shell">生成日期 2026-09-16 · 数据源：ern_groups_train_shap_20260915_084135.json · 纯 HTML / CSS / JavaScript，无外部依赖</div></footer>
+  <div class="tooltip" id="tooltip" role="status"></div>
+
+  <script>
+  const DATA = {meta:{channels:["FP1","F3","F7","FC3","C3","C5","P3","P7","PO7","PO3","O1","Oz","Pz","CPz","FP2","Fz","F4","F8","FC4","FCz","Cz","C4","C6","P4","P8","PO8","PO4","O2"],excluded_channels:["P9","P10","HEOG_left","HEOG_right","VEOG_lower"],bands:[{name:"delta",lo:.5,hi:4},{name:"theta",lo:4,hi:8},{name:"alpha",lo:8,hi:13},{name:"beta",lo:13,hi:30},{name:"gamma",lo:30,hi:45}],tmin:-.2,tmax:.8,sfreq:250,seed:42},results:[
+    ["raw",60,.747368,.62,28,16049,9548,1685,4816,14232,1817,[.940721,.855442,.960568,.776439,.725346,.745972,.735514,[[8195,298],[268,787]]],[.941238,.896865,.967663,.770812,.717682,.838542,.773419,[[4050,190],[93,483]]]],
+    ["ica",60,.750670,.59,28,16049,9548,1685,4816,14232,1817,[.947214,.858677,.966199,.796023,.769833,.745024,.757225,[[8258,235],[269,786]]],[.935839,.892299,.966539,.773072,.692086,.835069,.756884,[[4026,214],[95,481]]]],
+    ["g_1_coherent",60,.740541,.64,28,15987,9510,1679,4798,14175,1812,[.942587,.851071,.963734,.783538,.743491,.733587,.738506,[[8193,266],[280,771]]],[.937057,.857788,.953662,.751922,.730640,.753472,.741880,[[4062,160],[142,434]]]],
+    ["g_1_specific",60,.658477,.57,28,15987,9510,1679,4798,14175,1812,[.908097,.822934,.931514,.673214,.566893,.713606,.631845,[[7886,573],[301,750]]],[.899125,.783010,.870368,.587583,.572555,.630208,.600000,[[3951,271],[213,363]]]],
+    ["g_1_coherent+specific",60,.774725,.63,56,15987,9510,1679,4798,14175,1812,[.952366,.871150,.977455,.833923,.794872,.766889,.780630,[[8251,208],[245,806]]],[.941851,.874755,.964550,.778055,.743842,.786458,.764557,[[4066,156],[123,453]]]],
+    ["g_0.5_coherent",60,.729659,.60,28,15987,9510,1679,4798,14175,1812,[.936593,.852284,.958651,.757941,.700717,.744053,.721735,[[8125,334],[269,782]]],[.928512,.858929,.947107,.736352,.678955,.767361,.720456,[[4013,209],[134,442]]]],
+    ["g_0.5_specific",60,.663317,.60,28,15987,9510,1679,4798,14175,1812,[.913670,.810651,.935801,.681633,.596154,.678402,.634624,[[7976,483],[338,713]]],[.888287,.752864,.869904,.535533,.532154,.574653,.552588,[[3931,291],[245,331]]]],
+    ["g_0.5_coherent+specific",60,.728767,.64,56,15987,9510,1679,4798,14175,1812,[.938381,.825792,.957381,.758255,.740434,.681256,.709613,[[8208,251],[335,716]]],[.934973,.861101,.956994,.729500,.714286,.763889,.738255,[[4046,176],[136,440]]]],
+    ["g_0.02_coherent",60,.463654,.54,28,15987,9510,1679,4798,14175,1812,[.829232,.722357,.821086,.386870,.341098,.585157,.430974,[[7271,1188],[436,615]]],[.813047,.735599,.815395,.414047,.347288,.633681,.448679,[[3536,686],[211,365]]]],
+    ["g_0.02_specific",60,.714640,.60,28,15987,9510,1679,4798,14175,1812,[.931335,.859328,.958014,.758713,.663921,.766889,.711700,[[8051,408],[245,806]]],[.920800,.857546,.948314,.707333,.640805,.774306,.701258,[[3972,250],[130,446]]]],
+    ["g_0.02_coherent+specific",60,.725389,.60,56,15987,9510,1679,4798,14175,1812,[.922818,.813294,.939809,.694607,.644485,.672693,.658287,[[8069,390],[344,707]]],[.923093,.845355,.946369,.692553,.659476,.743056,.698776,[[4001,221],[148,428]]]],
+    ["g_0.1_coherent",60,.581454,.60,28,15987,9510,1679,4798,14175,1812,[.899159,.783329,.911623,.605903,.537037,.634634,.581771,[[7884,575],[384,667]]],[.889537,.820292,.906891,.614602,.528967,.729167,.613139,[[3848,374],[156,420]]]],
+    ["g_0.1_specific",60,.674033,.59,28,15987,9510,1679,4798,14175,1812,[.929758,.820112,.954069,.735422,.683254,.679353,.681298,[[8128,331],[337,714]]],[.919133,.791381,.918025,.660330,.677358,.623264,.649186,[[4051,171],[217,359]]]],
+    ["g_0.1_coherent+specific",60,.749326,.61,56,15987,9510,1679,4798,14175,1812,[.937960,.839304,.961085,.761729,.722276,.712655,.717433,[[8171,288],[302,749]]],[.931221,.855971,.955605,.726748,.696486,.756944,.725458,[[4032,190],[140,436]]]]
+  ]};
+  const METRICS=["accuracy","balanced_accuracy","auroc","auc_pr","precision_deviant","recall_deviant","f1_deviant"];
+  const LABELS={accuracy:"Accuracy",balanced_accuracy:"Balanced acc.",auroc:"AUROC",auc_pr:"AUPRC",precision_deviant:"Precision",recall_deviant:"Recall",f1_deviant:"F1 (error)"};
+  DATA.results=DATA.results.map(r=>{const obj={preproc:r[0],epochs_done:r[1],val_f1_best:r[2],thr:r[3],n_channels:r[4],n_trials:r[5],n_train:r[6],n_val:r[7],n_test:r[8],n_correct:r[9],n_error:r[10],train_metrics:{},metrics:{}}; METRICS.forEach((m,i)=>{obj.train_metrics[m]=r[11][i];obj.metrics[m]=r[12][i]});obj.train_metrics.confusion=r[11][7];obj.metrics.confusion=r[12][7];return obj});
+  const NS="http://www.w3.org/2000/svg", tooltip=document.getElementById("tooltip");
+  const colors={baseline:"#f4bd6a",coherent:"#59dfd1",specific:"#ff7d79",combined:"#bda8ff"};
+  const fmt=(v,d=3)=>Number(v).toFixed(d), niceName=s=>s.replace("g_","g=").replaceAll("_"," · ").replace("coherent+specific","coherent + specific");
+  const family=s=>s.includes("+")?"combined":s.endsWith("specific")?"specific":s.endsWith("coherent")?"coherent":"baseline";
+  const colorFor=s=>colors[family(s)];
+  function el(tag,attrs={},text=""){const n=document.createElementNS(NS,tag);Object.entries(attrs).forEach(([k,v])=>n.setAttribute(k,v));if(text)n.textContent=text;return n}
+  function showTip(e,html){tooltip.innerHTML=html;tooltip.style.left=e.clientX+"px";tooltip.style.top=e.clientY+"px";tooltip.style.opacity=1}
+  function hideTip(){tooltip.style.opacity=0}
+  function electrodeArt(){const g=document.getElementById("electrodes"),cx=310,cy=208;for(let i=0;i<28;i++){const a=(i/28)*Math.PI*2-Math.PI/2, ring=i%3,rad=[65,112,157][ring],x=cx+Math.cos(a)*rad,y=cy+Math.sin(a)*rad;g.appendChild(el("circle",{cx:x,cy:y,r:ring===0?6:4.5,fill:ring===0?"#f4bd6a":"#59dfd1",opacity:.9}))}}
+  electrodeArt();
+  function renderRank(){const svg=document.getElementById("rankChart"),metric=document.getElementById("rankMetric").value,mode=document.querySelector(".seg button[aria-pressed='true']").dataset.mode,raw=DATA.results[0].metrics[metric];svg.innerHTML="";const sorted=[...DATA.results].sort((a,b)=>b.metrics[metric]-a.metrics[metric]),W=1100,H=620,L=250,R=70,T=36,B=54,row=(H-T-B)/sorted.length;let vals=sorted.map(d=>mode==="delta"?d.metrics[metric]-raw:d.metrics[metric]);let min,max;if(mode==="delta"){const a=Math.max(...vals.map(Math.abs));min=-Math.max(.02,a*1.12);max=Math.max(.02,a*1.12)}else{min=Math.max(0,Math.min(...vals)-.035);max=Math.min(1,Math.max(...vals)+.025)};const x=v=>L+(v-min)/(max-min)*(W-L-R);for(let i=0;i<=5;i++){const v=min+(max-min)*i/5,xx=x(v);svg.append(el("line",{x1:xx,y1:T,x2:xx,y2:H-B,class:"grid"}));svg.append(el("text",{x:xx,y:H-22,"text-anchor":"middle"},mode==="delta"?(v>=0?"+":"")+fmt(v):fmt(v)))}const base=mode==="delta"?0:raw;svg.append(el("line",{x1:x(base),y1:T-8,x2:x(base),y2:H-B,class:"raw-line"}));sorted.forEach((d,i)=>{const y=T+row*(i+.5),v=mode==="delta"?d.metrics[metric]-raw:d.metrics[metric];svg.append(el("text",{x:L-18,y:y+4,"text-anchor":"end",class:"label"},niceName(d.preproc)));const start=mode==="delta"?x(0):x(min);svg.append(el("line",{x1:start,y1:y,x2:x(v),y2:y,stroke:colorFor(d.preproc),"stroke-width":7,"stroke-linecap":"round",opacity:.5}));const dot=el("circle",{cx:x(v),cy:y,r:7,fill:colorFor(d.preproc),stroke:"#071217","stroke-width":3,tabindex:0});dot.addEventListener("mousemove",e=>showTip(e,`<strong>${niceName(d.preproc)}</strong><br>${LABELS[metric]} ${fmt(d.metrics[metric],4)}${mode==="delta"?`<br>Δ Raw ${(v>=0?"+":"")+fmt(v,4)}`:""}`));dot.addEventListener("mouseleave",hideTip);svg.append(dot);svg.append(el("text",{x:x(v)+(v>=base?12:-12),y:y+4,"text-anchor":v>=base?"start":"end",class:"label"},mode==="delta"?(v>=0?"+":"")+fmt(v):fmt(v)))})}
+  document.getElementById("rankMetric").addEventListener("change",renderRank);document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{document.querySelectorAll(".seg button").forEach(x=>x.setAttribute("aria-pressed",x===b));renderRank()}));
+  function renderMatrix(){const metrics=["auroc","auc_pr","balanced_accuracy","f1_deviant","precision_deviant","recall_deviant"],table=document.getElementById("metricMatrix"),mins={},maxs={};metrics.forEach(m=>{const v=DATA.results.map(d=>d.metrics[m]);mins[m]=Math.min(...v);maxs[m]=Math.max(...v)});table.innerHTML=`<thead><tr><th>条件</th>${metrics.map(m=>`<th>${LABELS[m]}</th>`).join("")}</tr></thead><tbody>${DATA.results.map(d=>`<tr><td>${niceName(d.preproc)}</td>${metrics.map(m=>{const t=(d.metrics[m]-mins[m])/(maxs[m]-mins[m]),h=172-18*t,l=40+31*t;return `<td style="background:hsl(${h} 70% ${l}%)" title="${LABELS[m]} ${fmt(d.metrics[m],4)}">${fmt(d.metrics[m])}</td>`}).join("")}</tr>`).join("")}</tbody>`}
+  function renderScatter(){const svg=document.getElementById("prScatter"),W=820,H=570,L=88,R=40,T=34,B=72,xmin=.3,xmax=.78,ymin=.54,ymax=.87,x=v=>L+(v-xmin)/(xmax-xmin)*(W-L-R),y=v=>H-B-(v-ymin)/(ymax-ymin)*(H-T-B);svg.innerHTML="";for(let i=0;i<=5;i++){const xv=xmin+(xmax-xmin)*i/5,yv=ymin+(ymax-ymin)*i/5;svg.append(el("line",{x1:x(xv),y1:T,x2:x(xv),y2:H-B,class:"grid"}));svg.append(el("line",{x1:L,y1:y(yv),x2:W-R,y2:y(yv),class:"grid"}));svg.append(el("text",{x:x(xv),y:H-36,"text-anchor":"middle"},fmt(xv,2)));svg.append(el("text",{x:L-14,y:y(yv)+4,"text-anchor":"end"},fmt(yv,2)))}svg.append(el("text",{x:(L+W-R)/2,y:H-8,"text-anchor":"middle",class:"label"},"Precision（error）"));const yl=el("text",{x:18,y:(T+H-B)/2,"text-anchor":"middle",class:"label",transform:`rotate(-90 18 ${(T+H-B)/2})`},"Recall（error）");svg.append(yl);DATA.results.forEach(d=>{const m=d.metrics,r=9+(m.f1_deviant-.44)/(.78-.44)*10,c=el("circle",{cx:x(m.precision_deviant),cy:y(m.recall_deviant),r,fill:colorFor(d.preproc),opacity:.82,stroke:"#071217","stroke-width":3,tabindex:0});c.addEventListener("mousemove",e=>showTip(e,`<strong>${niceName(d.preproc)}</strong><br>P ${fmt(m.precision_deviant)} · R ${fmt(m.recall_deviant)} · F1 ${fmt(m.f1_deviant)}`));c.addEventListener("mouseleave",hideTip);svg.append(c)});}
+  const cmSelect=document.getElementById("cmCondition");cmSelect.innerHTML=DATA.results.map((d,i)=>`<option value="${i}">${niceName(d.preproc)}</option>`).join("");
+  function renderCM(){const d=DATA.results[+cmSelect.value],[[tn,fp],[fn,tp]]=d.metrics.confusion,total=tn+fp+fn+tp,max=Math.max(tn,fp,fn,tp),cells=[[tn,"True correct","#59dfd1"],[fp,"False error","#f4bd6a"],[fn,"Missed error","#ff7d79"],[tp,"True error","#bda8ff"]];document.getElementById("cmatrix").innerHTML=cells.map(([v,l,c])=>`<div class="cm-cell" style="background:${c};opacity:${.52+.48*v/max}"><span>${l}</span><strong>${v.toLocaleString()}</strong></div>`).join("");document.getElementById("cmThr").textContent=fmt(d.thr,2);document.getElementById("cmSummary").textContent=`${total.toLocaleString()} 个测试试次中，${(tn+tp).toLocaleString()} 个分类正确；${fp} 个 correct 被误报为 error，${fn} 个 error 被漏检。`;document.getElementById("cmRates").textContent=`Specificity ${fmt(tn/(tn+fp))} · Sensitivity ${fmt(tp/(tp+fn))} · Error prevalence ${fmt((tp+fn)/total)}`}
+  cmSelect.addEventListener("change",renderCM);
+  function renderGap(){const svg=document.getElementById("gapChart"),metric=document.getElementById("gapMetric").value,W=1100,H=620,L=250,R=70,T=38,B=54,row=(H-T-B)/DATA.results.length,all=DATA.results.flatMap(d=>[d.train_metrics[metric],d.metrics[metric]]),min=Math.min(...all)-.025,max=Math.min(1,Math.max(...all)+.02),x=v=>L+(v-min)/(max-min)*(W-L-R);svg.innerHTML="";for(let i=0;i<=5;i++){const v=min+(max-min)*i/5,xx=x(v);svg.append(el("line",{x1:xx,y1:T,x2:xx,y2:H-B,class:"grid"}));svg.append(el("text",{x:xx,y:H-22,"text-anchor":"middle"},fmt(v)))}DATA.results.forEach((d,i)=>{const y=T+row*(i+.5),a=d.train_metrics[metric],b=d.metrics[metric],delta=b-a;svg.append(el("text",{x:L-18,y:y+4,"text-anchor":"end",class:"label"},niceName(d.preproc)));svg.append(el("line",{x1:x(a),y1:y,x2:x(b),y2:y,stroke:delta>=0?"#59dfd1":"#ff7d79","stroke-width":4,opacity:.65}));svg.append(el("circle",{cx:x(a),cy:y,r:6,fill:"#547079"}));svg.append(el("circle",{cx:x(b),cy:y,r:7,fill:"#59dfd1",stroke:"#071217","stroke-width":2}));svg.append(el("text",{x:Math.max(x(a),x(b))+11,y:y+4,class:"label"},`${delta>=0?"+":""}${fmt(delta,3)}`))})}
+  document.getElementById("gapMetric").addEventListener("change",renderGap);
+  document.getElementById("channelChips").innerHTML=DATA.meta.channels.map(c=>`<span class="chip">${c}</span>`).join("");document.getElementById("excludedChips").innerHTML=DATA.meta.excluded_channels.map(c=>`<span class="chip off">${c}</span>`).join("");
+  const columns=[["preproc","条件"],["auroc","AUROC"],["auc_pr","AUPRC"],["delta_pr","Δ AUPRC"],["balanced_accuracy","Bal. acc."],["f1_deviant","F1"],["precision_deviant","Precision"],["recall_deviant","Recall"],["accuracy","Accuracy"],["thr","阈值"],["n_channels","通道"],["n_test","测试 n"]];let sortKey="auroc",sortDir=-1;
+  function renderTable(){const raw=DATA.results[0].metrics.auc_pr,rows=[...DATA.results].sort((a,b)=>{const av=sortKey==="preproc"?a.preproc:sortKey==="thr"||sortKey==="n_channels"||sortKey==="n_test"?a[sortKey]:sortKey==="delta_pr"?a.metrics.auc_pr-raw:a.metrics[sortKey],bv=sortKey==="preproc"?b.preproc:sortKey==="thr"||sortKey==="n_channels"||sortKey==="n_test"?b[sortKey]:sortKey==="delta_pr"?b.metrics.auc_pr-raw:b.metrics[sortKey];return typeof av==="string"?av.localeCompare(bv)*sortDir:(av-bv)*sortDir});document.getElementById("dataHead").innerHTML=`<tr>${columns.map(([k,l])=>`<th data-key="${k}">${l}${k===sortKey?(sortDir<0?" ↓":" ↑"):""}</th>`).join("")}</tr>`;document.getElementById("dataBody").innerHTML=rows.map((d,i)=>{const delta=d.metrics.auc_pr-raw;return `<tr><td><span class="rank">${String(i+1).padStart(2,"0")}</span>${niceName(d.preproc)}</td><td>${fmt(d.metrics.auroc,4)}</td><td>${fmt(d.metrics.auc_pr,4)}</td><td style="color:${delta>=0?"#59dfd1":"#ff9d99"}">${delta>=0?"+":""}${fmt(delta,4)}</td><td>${fmt(d.metrics.balanced_accuracy,4)}</td><td>${fmt(d.metrics.f1_deviant,4)}</td><td>${fmt(d.metrics.precision_deviant,4)}</td><td>${fmt(d.metrics.recall_deviant,4)}</td><td>${fmt(d.metrics.accuracy,4)}</td><td>${fmt(d.thr,2)}</td><td>${d.n_channels}</td><td>${d.n_test.toLocaleString()}</td></tr>`}).join("");document.querySelectorAll("#dataHead th").forEach(th=>th.addEventListener("click",()=>{if(sortKey===th.dataset.key)sortDir*=-1;else{sortKey=th.dataset.key;sortDir=sortKey==="preproc"?1:-1}renderTable()}))}
+  renderRank();renderMatrix();renderScatter();renderCM();renderGap();renderTable();
+  </script>
+</body>
+</html>
