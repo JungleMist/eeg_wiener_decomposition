@@ -215,6 +215,25 @@ root README's automatic ECMAD section and `docs/auto_ecmad.md` for commands.
 - `tests/test_auto_ecmad/` covers contracts, leakage boundaries, decomposition,
   loss, fresh fitting, recovery/inference, interchangeable backends and analysis.
 
+### MDD_EC ten-fold CV analysis (`results/mdd_ec_cv`)
+
+`scripts/run_mdd_ec_cv.py` runs the ds003478 MDD_EC ten-fold ECMAD experiment
+(fixed 99-subject holdout + 10 stratified development folds; 13 conditions =
+Raw plus 4 phase-gate thresholds × specific/coherent/combo for EEGNet and
+XGBoost). `scripts/analyze_mdd_ec_cv.py` is its standalone post-hoc analysis
+entry point and writes everything under `results/mdd_ec_cv/analysis/`:
+`performance/` (fold aggregation, pooled-OOF and holdout-ensemble metrics with
+bootstrap CIs, paired bootstrap deltas vs raw, Wilcoxon signed-rank +
+Mann-Whitney per-fold AUROC tests with Holm correction), `branches/`
+(specific/coherent Welch power share per phase/band/region/cohort, branch
+coherence purity, combo-model SHAP branch reliance), `effects/` (Cohen's d
+MDD vs Control for relative/log band power, coherence/PLV/wPLI — wPLI is
+recomputed from waveforms — Hjorth/spectral entropy and branch share),
+`figures/` and `report.md`. Waveform metrics use the `epochs/` and
+`features/` caches; `--reuse` reuses cached bootstrap tables and the
+participant-metrics pickle. Rerun the script (not by hand) to refresh the
+report after any pipeline re-run.
+
 ### Cache invalidation dependencies
 
 The pipeline is branched rather than a single linear tier chain:
