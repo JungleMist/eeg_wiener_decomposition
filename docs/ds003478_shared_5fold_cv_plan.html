@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ds003478｜EEGNet 和 XGBoost 共享五折 CV 方案</title>
+<style>
+:root{--ink:#152b3e;--muted:#506474;--line:#cedce4;--accent:#086760;--wash:#eef6f5}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:#f2f6f8;font:16px/1.66 system-ui,sans-serif}
+.wrap{max-width:1040px;margin:auto;padding:0 clamp(14px,4vw,38px)}
+header{background:#142d44;color:white;padding:34px 0 25px}header p{color:#d7e8ee}
+h1{font-size:clamp(26px,5vw,45px);line-height:1.21;margin:.24em 0}
+h2{font-size:1.4rem;line-height:1.35;margin:0 0 .48em}h3{font-size:1.05rem;margin:1.15em 0 .35em}
+nav{display:flex;flex-wrap:wrap;gap:6px 16px}a{color:var(--accent)}nav a{color:#e2fff8}
+main.wrap{padding-top:20px;padding-bottom:20px}section{background:white;border:1px solid var(--line);border-radius:12px;padding:clamp(14px,3vw,24px);margin-bottom:15px}
+p{margin:.5em 0 .85em}li+li{margin-top:.33em}code{overflow-wrap:anywhere}small{color:var(--muted)}
+.note{border-left:4px solid var(--accent);background:var(--wash);padding:.6em .8em}.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.93rem}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:.5em .65em}
+thead th{background:#edf4f7}
+@media print{body{background:white}header{background:white;color:var(--ink)}header p,nav a{color:var(--ink)}section{border:0;padding:8px 0}thead{display:table-header-group}tr{break-inside:avoid}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+<div>DS003478 v1.1.0 · 方案修订 · 2026-11-20</div>
+<h1>EEGNet 和 XGBoost 共享五折 CV</h1>
+<p>复用已有 ECMAD 缓存，对同一批受试者的 13 种信号输入做配对比较。</p>
+<nav aria-label="目录"><a href="#cache">缓存与队列</a><a href="#cv">划分与训练</a><a href="#shap">折内 SHAP</a><a href="#stats">统计</a><a href="#output">产物与核查</a></nav>
+</div></header>
+<main class="wrap">
+<section id="cache">
+<h2>复用现有缓存和预处理条件</h2>
+<p>直接读取现有的 <code>run_config.json</code>、<code>subject_split.csv</code>、<code>recordings.csv</code>、<code>epochs/</code> 和 <code>features/</code>。本地缓存为 <code>~/Cache/ds003478_ecmad_bdi20_13_avgref</code>，服务器可继续使用 <code>cache/ecmad_cache</code>。预检已确认本地 211 条合格记录的信号与特征文件包含相同条件键，2,531 个保留窗的起点逐条匹配。</p>
+<ul>
+<li>仍使用 BDI ≥ 20 高分组 30 人和 BDI ≤ 13 低分组 76 人。13 &lt; BDI &lt; 20 及缺失者排除。研究结论对应 BDI 分组任务。</li>
+<li>原 19 导平均参考及其后的 0.5–40 Hz 带通、125 Hz 重采样、20 秒分窗、200 µV 剔除规则随缓存继承。比较 <code>raw</code> 与 0.02、0.05、0.10、1.00 rad 下的 <code>specific</code>、<code>coherent</code> 和 <code>specific_coherent</code>。拼接顺序为 specific 在前；两组成分共享窗索引。</li>
+<li>EEGNet 读取信号窗，XGBoost 读取现有 <code>base211_conn80</code> 特征。检查适用配置、特征键与窗起点、受试者标签及记录覆盖。队列级拟合的步骤（如 StandardScaler）在每折独立完成。</li>
+</ul>
+</section>
+<section id="cv">
+<h2>一次共享的受试者级分层五折</h2>
+<ol>
+<li>从有效记录合并历史 <code>train</code>、<code>validation</code>、<code>test</code> 三组，按 <code>participant_id</code> 排序。用 <code>StratifiedKFold(n_splits=5, shuffle=True, random_state=42)</code> 生成一份固定清单。全体 106 人参与交叉验证；无永久 holdout。</li>
+<li>每次使用一折评估、四折开发。一个人的所有记录和 EEG 窗跟随其 ID。五个评估折互斥，每人恰好留出一次。两种模型及 13 个条件共用清单。</li>
+<li>折内对留出者所有保留窗的概率取均值得到一个受试者概率，拼接五份评估预测形成全局 OOF 表。本方案每个人只使用其评估折对应的一个模型预测。</li>
+</ol>
+<div class="scroll"><table>
+<thead><tr><th scope="col">折（从 0 开始）</th><th scope="col">开发：低 / 高 BDI</th><th scope="col">评估：低 / 高 BDI</th><th scope="col">EEGNet 轮次校准：拟合 / 早停验证</th></tr></thead>
+<tbody><tr><th scope="row">0</th><td>60 / 24（84 人）</td><td>16 / 6（22 人）</td><td>67 / 17</td></tr>
+<tr><th scope="row">1–4 各折</th><td>61 / 24（85 人）</td><td>15 / 6（21 人）</td><td>68 / 17</td></tr></tbody>
+</table></div>
+<h3>EEGNet</h3>
+<p>继续使用 TUEP 架构及训练配方。输入 19 × 2,500（拼接组 38 × 2,500），逐窗逐通道 z-score。F1=8、D=2、dropout=0.25，Adam 初始学习率 0.001、weight decay 0.0001；窗批量 64，每次更新聚合最多 4 人，受试者等权且按训练类别加权。</p>
+<p>每个开发折内按 BDI 再固定留出 20% 作早停验证（种子 42 + 折号，两组模型的评估清单不受此步骤影响）。用验证受试者 AP 选最佳 epoch，最多 200 epoch，耐心 20；学习率调度耐心 10、倍率 0.5。选定最佳轮次后，重新初始化网络，在该折全部 84/85 名开发受试者上重训至选定轮次，并重放校准阶段对应的学习率序列。评估折在模型确定后只用于生成 OOF 预测与 SHAP。这个训练配方产生 65 次轮次校准和 65 次全开发折拟合。</p>
+<h3>XGBoost</h3>
+<p>保留本次修改后的默认超参数方案。单组 291 维，拼接 582 维。<code>StandardScaler</code> 仅拟合开发折的训练窗；<code>XGBClassifier(device=device, n_jobs=workers)</code> 其余参数使用固定版本的库默认值。每折一次拟合，无网格搜索、早停和手工类别加权，总计 65 次。主分析使用 OOF 概率，不从全局 OOF 调分类阈值。</p>
+</section>
+<section id="shap">
+<h2>在每折上构造解释器，汇总所有评估受试者</h2>
+<p>每个条件、每折均使用自己的最终模型。背景固定从该折开发受试者中抽取 32 人，每人选 1 个保留窗（确定性抽样，保存索引）。同一折的 13 条件和两种模型共用背景 ID 及窗起点，分别转为该条件的归一化张量或经本折 scaler 转换的特征。用解释器处理评估折每名受试者的全部保留窗。</p>
+<div class="scroll"><table>
+<thead><tr><th scope="col">模型</th><th scope="col">解释方法</th><th scope="col">归因对象</th></tr></thead>
+<tbody>
+<tr><th scope="row">EEGNet</th><td>DeepSHAP（<code>shap.DeepExplainer</code>）。</td><td>窗级高 BDI 概率；归因形状为通道 × 时间，单组 19 通道，拼接 38 通道。保留可加性校验。<br><small>依据 <a href="https://shap.readthedocs.io/en/stable/generated/shap.DeepExplainer.html">SHAP DeepExplainer 文档</a>。</small></td></tr>
+<tr><th scope="row">XGBoost</th><td>TreeSHAP（<code>shap.TreeExplainer</code>，<code>feature_perturbation="interventional"</code>），显式传入相同训练窗产生的背景特征。</td><td>完整 booster 的窗级 log-odds；按特征、频带和成分汇总，保留可加性校验。<br><small>依据 <a href="https://shap.readthedocs.io/en/stable/generated/shap.TreeExplainer.html">SHAP TreeExplainer 文档</a>。</small></td></tr>
+</tbody></table></div>
+<p>按 <code>fold, participant_id, recording_id, epoch_start</code> 对齐归因和窗预测，并记录各折背景样本、基准值与输出尺度。全局重要度先在每名受试者内汇总，再让 106 名受试者等权，避免窗数多的人主导。EEGNet 按通道对时间取平均绝对 SHAP，XGBoost 先按特征报告平均绝对 SHAP，频带汇总时单列无频带归属的特征。拼接组在同一模型内比较 specific 与 coherent 的归因占比。两模型的 SHAP 数值尺度不同，各自展示。SHAP 描述模型对输入的使用，不能直接推断 EEG 成分的生理来源。</p>
+<p class="note">当前 EEGNet 的 19/38 通道和 XGBoost 的 291/582 维输入已通过合成数据的 SHAP 形状、有限值及加性检查。完整训练后的模型仍需在首折实测；加性检查失败应定位原因，并记录失败的折与条件。</p>
+</section>
+<section id="stats">
+<h2>主统计基于同一批受试者的全局 OOF 预测</h2>
+<div class="scroll"><table>
+<thead><tr><th scope="col">分析</th><th scope="col">方法及报告</th></tr></thead>
+<tbody>
+<tr><th scope="row">全局 AUROC</th><td>对 106 条受试者 OOF 概率统一计算 AUROC 和 95% 区间。对同一批 ID 的分数按标签对齐后，使用配对 DeLong 报告 ΔAUROC、区间与双侧 p 值。主要比较为每种模型的 12 个 ECMAD 条件分别对 raw，共 24 项，以 Holm 校正。同条件的 EEGNet 对 XGBoost 可另列为探索性比较。<br><small>见 <a href="https://pubmed.ncbi.nlm.nih.gov/3203132/">DeLong 等，1988</a>。</small></td></tr>
+<tr><th scope="row">全局 AUPRC</th><td>本队列比例为高 BDI : 低 BDI = 30:76 ≈ 1:2.53，达到图中不平衡规则。并列报告全局 average precision（AP，沿用 <code>auprc</code> 命名）及基线 30/106 ≈ 0.283。用配对分层 bootstrap 比较各 ECMAD 条件与 raw 的 ΔAP：10,000 次，种子 42，按类别有放回抽受试者，各条件共用同一次抽样；报告 95% 百分位区间和双侧 bootstrap 检验（对中心化差值构造零假设，24 项另作 Holm 校正）。</td></tr>
+<tr><th scope="row">逐折备选分析</th><td>分别计算并保留五个折 AUROC 和逐折配对差，供检查方向一致性。Wilcoxon 符号秩检验仅作探索性附表。五对均非零且差值绝对值无并列时，双侧精确检验的最小 p 值为 0.0625；训练集相互重叠，也限制了折间检验的解释。</td></tr>
+</tbody></table></div>
+<p class="note">DeLong 和 bootstrap 在固定 OOF 分数上应用。五折模型共享部分训练者，且折间分数可能有尺度差异；这些区间不能完全捕捉重新划分或重新训练产生的变异。全局 OOF AUROC 与折 AUROC 均值回答不同的问题，分别报告。看完整 OOF 后挑出的最佳条件应标为探索性。<small>见 <a href="https://jmlr.org/papers/v5/grandvalet04a.html">Bengio 与 Grandvalet，2004</a>。</small></p>
+</section>
+<section id="output">
+<h2>输出与完整性核查</h2>
+<ul>
+<li>使用独立目录（例如 <code>results/ds003478-1.1.0-shared5fold</code>），保存统一划分清单、配置和依赖版本、每折窗/受试者预测、解释背景/评估窗口索引、SHAP、全局与逐折指标、配对统计和 HTML 报告。</li>
+<li>按「方法 × 条件 × 折」断点恢复，预测和 SHAP 校验通过后标记完成，并释放临时权重。EEGNet 全量逐时间点 float32 SHAP 约 8.2 GB（压缩前），建议按折分块压缩并保留受试者级汇总。</li>
+<li>汇总前检查 2 × 13 × 5 = 130 个评估任务全部完成、每条件有 106 个唯一且可配对的受试者、背景与评估 ID 无交集、窗索引和归因形状匹配，并存档评估输出与标签的一致性。</li>
+<li>复用现有 <a href="../configs/ECMAD.yaml">ECMAD 配置</a> 与 <a href="../scripts/ECMAD.py">缓存实现</a>。本页定义新实验协议；旧 LOSO 嵌套入口和历史结果对应原实验。</li>
+</ul>
+</section>
+</main>
+</body>
+</html>
